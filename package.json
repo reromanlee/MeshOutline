@@ -1,0 +1,16 @@
+{
+  "name": "com.reromanlee.meshoutline",
+  "version": "1.0.0",
+  "displayName": "MeshOutline",
+  "description": "",
+  "unity": "6000.0",
+  "license": "MIT",
+  "documentationUrl": "https://github.com/reromanlee/MeshOutline#readme",
+  "changelogUrl": "https://github.com/reromanlee/MeshOutline/blob/main/CHANGELOG.md",
+  "keywords": [],
+  "dependencies": {},
+  "author": {
+    "name": "Roman Likhadievski",
+    "url": "https://github.com/reromanlee"
+  }
+}
