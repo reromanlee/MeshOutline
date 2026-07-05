@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "displayName": "MeshOutline",
   "description": "Highly efficient prebaked mesh outlines. Smooth normals are baked into UV4 at edit time and rendered with a two-pass stencil mask + extruded fill, giving crack-free outlines with zero per-frame CPU cost \u2014 no post-processing, no render textures, no command buffers.",
-  "unity": "6000.0",
+  "unity": "2021.3",
   "keywords": [
     "outline",
     "highlight",
