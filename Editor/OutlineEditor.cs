@@ -1,70 +1,120 @@
-using System;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
 namespace reromanlee.MeshOutline.Editor
 {
+    /// <summary>
+    /// Inspector for <see cref="Outline"/>: shows bake status and provides
+    /// Create/Recalculate/Remove buttons with Undo support.
+    /// </summary>
     [CustomEditor(typeof(Outline))]
+    [CanEditMultipleObjects]
     public class OutlineEditor : UnityEditor.Editor
     {
-        private const string packageOutlineMaskPath = "Packages/com.reromanlee.meshoutline/Runtime/Materials/OutlineMask.mat";
-        private const string assetsOutlineMaskPath = "Assets/MeshOutline/Runtime/Materials/OutlineMask.mat";
-
-        private const string packageOutlineFillPath = "Packages/com.reromanlee.meshoutline/Runtime/Materials/OutlineFill.mat";
-        private const string assetsOutlineFillPath = "Assets/MeshOutline/Runtime/Materials/OutlineFill.mat";
-
         public override void OnInspectorGUI()
         {
             DrawDefaultInspector();
-            Outline outline = (Outline)target;
-            if (outline.IsCreated)
-            {
-                if (GUILayout.Button(outline.IsVisible ? "Hide" : "Show"))
-                {
-                    outline.IsVisible = !outline.IsVisible;
-                    MarkActveSceneDirty();
-                }
-            }
-            if (GUILayout.Button(outline.IsCreated ? "Recalculate" : "Create"))
-            {
-                Material outlineMask = LoadMaterialAt(packageOutlineMaskPath, assetsOutlineMaskPath);
-                Material outlineFill = LoadMaterialAt(packageOutlineFillPath, assetsOutlineFillPath);
-                if (outline.IsCreated)
-                {
-                    outline.Recalculate(outlineMask, outlineFill);
-                    MarkActveSceneDirty();
-                    return;
-                }
-                outline.Create(outlineMask, outlineFill);
-                MarkActveSceneDirty();
-            }
+
+            EditorGUILayout.Space();
+            DrawStatus();
+            DrawButtons();
+        }
+
+        private void DrawStatus()
+        {
+            if (targets.Length != 1) return;
+            var outline = (Outline)target;
+
             if (!outline.IsCreated)
             {
-                EditorGUILayout.HelpBox("Outline object is not created.", MessageType.Warning);
+                EditorGUILayout.HelpBox(
+                    "No outline baked yet. Assign the mask and fill materials and press Create.",
+                    MessageType.Info);
+            }
+            else if (outline.IsBakeStale)
+            {
+                EditorGUILayout.HelpBox(
+                    "The source mesh changed since the outline was baked. Press Recalculate " +
+                    "(this normally happens automatically).",
+                    MessageType.Warning);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Outline is baked and up to date.", MessageType.None);
             }
         }
 
-        private Material LoadMaterialAt(string packagePath, string assetsPath)
+        private void DrawButtons()
         {
-            Material material = AssetDatabase.LoadAssetAtPath<Material>(packagePath);
-            if (material != null)
+            bool anyCreated = false;
+            foreach (Object t in targets)
             {
-                return material;
+                if (((Outline)t).IsCreated) { anyCreated = true; break; }
             }
-            material = AssetDatabase.LoadAssetAtPath<Material>(assetsPath);
-            if (material == null)
+
+            if (targets.Length == 1 && anyCreated)
             {
-                throw new NullReferenceException($"Material not found at '{packagePath}' or '{assetsPath}'");
+                var outline = (Outline)target;
+                if (GUILayout.Button(outline.IsVisible ? "Hide" : "Show"))
+                {
+                    Undo.RecordObject(outline.GeneratedGameObject, "Toggle Outline Visibility");
+                    outline.IsVisible = !outline.IsVisible;
+                    MarkDirty(outline);
+                }
             }
-            return material;
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button(anyCreated ? "Recalculate" : "Create"))
+                {
+                    foreach (Object t in targets) CreateOrRecalculate((Outline)t);
+                }
+
+                using (new EditorGUI.DisabledScope(!anyCreated))
+                {
+                    if (GUILayout.Button("Remove"))
+                    {
+                        foreach (Object t in targets) RemoveOutline((Outline)t);
+                    }
+                }
+            }
         }
 
-        private void MarkActveSceneDirty()
+        internal static void CreateOrRecalculate(Outline outline)
         {
-            EditorSceneManager.MarkSceneDirty(
-                EditorSceneManager.GetActiveScene()
-            );
+            Undo.RecordObject(outline, "Bake Outline");
+            bool wasCreated = outline.IsCreated;
+
+            outline.Recalculate();
+
+            if (!wasCreated && outline.GeneratedGameObject != null)
+            {
+                Undo.RegisterCreatedObjectUndo(outline.GeneratedGameObject, "Bake Outline");
+            }
+            MarkDirty(outline);
+        }
+
+        internal static void RemoveOutline(Outline outline)
+        {
+            Undo.RecordObject(outline, "Remove Outline");
+            if (outline.GeneratedGameObject != null)
+            {
+                // Undo-aware destroy of the child; Remove() then clears the remaining
+                // references and destroys the baked mesh / material instances.
+                Undo.DestroyObjectImmediate(outline.GeneratedGameObject);
+            }
+            outline.Remove();
+            MarkDirty(outline);
+        }
+
+        internal static void MarkDirty(Outline outline)
+        {
+            EditorUtility.SetDirty(outline);
+            if (!Application.isPlaying && outline.gameObject.scene.IsValid())
+            {
+                EditorSceneManager.MarkSceneDirty(outline.gameObject.scene);
+            }
         }
     }
 }
