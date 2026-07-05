@@ -5,6 +5,9 @@ using UnityEngine;
 namespace reromanlee.MeshOutline
 {
     // TODO: make outline automatically being created and recalculated when mesh is changed, or when adding this component onto a game object with a mesh filter
+    // TODO: make optional ability to create instance of outline material for each outline object, so that each outline can have its own color and width
+    // TODO: make optional ability to sync visible state of outline with all child outline objects, so that when parent outline is hidden, all child outlines are also hidden
+    // TODO: make fields for outline color and width to sync them between editor inspector and outline material, so that when changing color or width in inspector, it will also change the color and width of the outline material for concenience
 
     /// <summary>
     /// 
