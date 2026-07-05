@@ -4,6 +4,11 @@ using UnityEngine;
 
 namespace reromanlee.MeshOutline
 {
+    // TODO: make outline automatically being created and recalculated when mesh is changed, or when adding this component onto a game object with a mesh filter
+
+    /// <summary>
+    /// 
+    /// </summary>
     [RequireComponent(typeof(MeshFilter))]
     public class Outline : MonoBehaviour
     {
@@ -12,17 +17,28 @@ namespace reromanlee.MeshOutline
         [SerializeField, HideInInspector] private MeshFilter outlineMeshFilter;
         [SerializeField, HideInInspector] private MeshRenderer outlineMeshRenderer;
 
+        /// <summary>
+        /// 
+        /// </summary>
         public bool IsCreated
         {
             get => outlineGameObject != null;
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
         public bool IsVisible
         {
             get => outlineGameObject.activeSelf;
             set => outlineGameObject.SetActive(value);
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="outlineMask"></param>
+        /// <param name="outlineFill"></param>
         public void Create(Material outlineMask, Material outlineFill)
         {
             outlineGameObject = new GameObject("Outline (generated)");
@@ -36,6 +52,7 @@ namespace reromanlee.MeshOutline
                 meshFilter = GetComponent<MeshFilter>();
             }
             Mesh sharedMesh = meshFilter.sharedMesh;
+            // TODO: reuse mesh if it exists within outline object to avoid memory leaks
             Mesh outlineMesh = new()
             {
                 vertices = sharedMesh.vertices,
@@ -57,6 +74,11 @@ namespace reromanlee.MeshOutline
             };
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="outlineMask"></param>
+        /// <param name="outlineFill"></param>
         public void Recalculate(Material outlineMask, Material outlineFill)
         {
             if (meshFilter == null)
@@ -64,6 +86,7 @@ namespace reromanlee.MeshOutline
                 meshFilter = GetComponent<MeshFilter>();
             }
             Mesh sharedMesh = meshFilter.sharedMesh;
+            // TODO: reuse mesh if it exists within outline object to avoid memory leaks
             Mesh outlineMesh = new()
             {
                 vertices = sharedMesh.vertices,
@@ -84,6 +107,11 @@ namespace reromanlee.MeshOutline
             };
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="mesh"></param>
+        /// <returns></returns>
         private List<Vector3> CalculateNormals(Mesh mesh)
         {
             var groups = mesh.vertices.Select(
