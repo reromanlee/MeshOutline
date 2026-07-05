@@ -4,6 +4,7 @@ using UnityEngine;
 
 namespace reromanlee.MeshOutline
 {
+    [RequireComponent(typeof(MeshFilter))]
     public class Outline : MonoBehaviour
     {
         [SerializeField, HideInInspector] private MeshFilter meshFilter;
@@ -24,11 +25,16 @@ namespace reromanlee.MeshOutline
 
         public void Create(Material outlineMask, Material outlineFill)
         {
-            outlineGameObject = new GameObject("Outline");
+            outlineGameObject = new GameObject("Outline (generated)");
+            // TODO: make it invisible in the hierarchy, but still be able to select it in the scene view and save it into the scene
             outlineGameObject.transform.SetParent(transform);
             outlineGameObject.transform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.Euler(Vector3.zero));
             outlineGameObject.transform.localScale = Vector3.one;
             outlineMeshFilter = outlineGameObject.AddComponent<MeshFilter>();
+            if (meshFilter == null)
+            {
+                meshFilter = GetComponent<MeshFilter>();
+            }
             Mesh sharedMesh = meshFilter.sharedMesh;
             Mesh outlineMesh = new()
             {
@@ -53,6 +59,10 @@ namespace reromanlee.MeshOutline
 
         public void Recalculate(Material outlineMask, Material outlineFill)
         {
+            if (meshFilter == null)
+            {
+                meshFilter = GetComponent<MeshFilter>();
+            }
             Mesh sharedMesh = meshFilter.sharedMesh;
             Mesh outlineMesh = new()
             {
