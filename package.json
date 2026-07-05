@@ -2,15 +2,22 @@
   "name": "com.reromanlee.meshoutline",
   "version": "1.0.0",
   "displayName": "MeshOutline",
-  "description": "",
+  "description": "Highly efficient prebaked mesh outlines. Smooth normals are baked into UV4 at edit time and rendered with a two-pass stencil mask + extruded fill, giving crack-free outlines with zero per-frame CPU cost \u2014 no post-processing, no render textures, no command buffers.",
   "unity": "6000.0",
+  "keywords": [
+    "outline",
+    "highlight",
+    "mesh",
+    "shader",
+    "stencil"
+  ],
   "license": "MIT",
-  "documentationUrl": "https://github.com/reromanlee/MeshOutline#readme",
-  "changelogUrl": "https://github.com/reromanlee/MeshOutline/blob/main/CHANGELOG.md",
-  "keywords": [],
-  "dependencies": {},
+  "licensesUrl": "https://github.com/reromanlee/MeshOutline/blob/main/LICENSE.md",
   "author": {
     "name": "Roman Likhadievski",
-    "url": "https://github.com/reromanlee"
-  }
+    "url": "https://github.com/reromanlee",
+    "email": "contact@reromanlee.com"
+  },
+  "documentationUrl": "https://github.com/reromanlee/MeshOutline#readme",
+  "changelogUrl": "https://github.com/reromanlee/MeshOutline/blob/main/CHANGELOG.md"
 }
