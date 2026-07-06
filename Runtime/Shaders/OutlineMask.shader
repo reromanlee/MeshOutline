@@ -43,6 +43,12 @@ Shader "reromanlee/OutlineMask" {
 			ZTest [_ZTest]
 			ZWrite Off
 			ColorMask 0
+			// The LEqual test must pass at EXACTLY the depth the source object wrote, but a
+			// batched/pre-transformed source renderer can land a last-bit different depth.
+			// A small pull-toward-camera bias makes the stamp reliable; an over-generous
+			// stamp is harmless (it only suppresses this object's own fill at pixels where
+			// that fill would depth-fail anyway — other fills ignore foreign refs).
+			Offset -1, -1
 
 			Stencil {
 				Ref [_StencilRef]
@@ -100,6 +106,8 @@ Shader "reromanlee/OutlineMask" {
 			ZTest [_ZTest]
 			ZWrite Off
 			ColorMask 0
+			// Depth-precision guard — see the URP pass above.
+			Offset -1, -1
 
 			Stencil {
 				Ref [_StencilRef]

@@ -120,6 +120,7 @@ Both materials expose a **ZTest** property:
 
 ## Troubleshooting
 
+- **A far object's outline draws over a nearer object** — check that **ZTest** is `LessEqual` on *both* the mask and fill materials (custom materials created from older versions may carry a stale `Disabled` value, which turns depth testing off entirely).
 - **Outline looks torn/cracked at hard edges** — the bake is stale; press **Recalculate** (normally automatic when the mesh changes).
 - **No outline after adding the component in a build** — baking is editor-only by design. Bake in the editor and ship the scene, or call `Create(mask, fill)` yourself at runtime with materials you assign.
 - **Changed color/width but nothing happens** — enable **Use Material Instances**. Without it the shared material assets are read-only by design (so the package's default materials are never modified), and a console warning points this out.

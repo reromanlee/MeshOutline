@@ -56,6 +56,10 @@ Shader "reromanlee/OutlineFill" {
 			ZWrite Off
 			Blend SrcAlpha OneMinusSrcAlpha
 			ColorMask RGB
+			// Same bias as the mask pass: keeps the fill's depth test aligned with the
+			// mask's stamp, and stops the band z-fighting geometry it rests against
+			// (e.g. an outlined character standing on the ground).
+			Offset -1, -1
 
 			Stencil {
 				Ref [_StencilRef]
@@ -143,6 +147,8 @@ Shader "reromanlee/OutlineFill" {
 			ZWrite Off
 			Blend SrcAlpha OneMinusSrcAlpha
 			ColorMask RGB
+			// Depth-precision guard — see the URP pass above.
+			Offset -1, -1
 
 			Stencil {
 				Ref [_StencilRef]
