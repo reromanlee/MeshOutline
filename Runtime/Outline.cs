@@ -18,7 +18,7 @@ namespace reromanlee.MeshOutline
     /// </summary>
     [RequireComponent(typeof(MeshFilter))]
     [DisallowMultipleComponent]
-    [ExecuteAlways] // Needed only so OnDestroy cleans up the generated object in edit mode. No per-frame callbacks are used.
+    [ExecuteAlways] // Needed only for OnEnable (per-object state refresh) and OnDestroy (edit-mode cleanup). No per-frame callbacks are used.
     public class Outline : MonoBehaviour
     {
         private const string GeneratedName = "Outline (generated)";
@@ -28,6 +28,7 @@ namespace reromanlee.MeshOutline
 
         private static readonly int OutlineColorId = Shader.PropertyToID("_OutlineColor");
         private static readonly int OutlineWidthId = Shader.PropertyToID("_OutlineWidth");
+        private static readonly int StencilRefId = Shader.PropertyToID("_StencilRef");
 
         [Header("Materials")]
         [SerializeField, Tooltip("Material for the mask pass (writes stencil, no color).")]
@@ -36,7 +37,7 @@ namespace reromanlee.MeshOutline
         [SerializeField, Tooltip("Material for the fill pass (extrudes along baked smooth normals and draws the outline color).")]
         private Material outlineFillMaterial;
 
-        [SerializeField, Tooltip("Create per-object instances of the outline materials so this outline can have its own color and width. When disabled, the shared material assets define the look and Outline Color/Width below are read-only (the shared assets are never modified by this component).")]
+        [SerializeField, Tooltip("Allow this outline to have its own color and width. When disabled, the shared material assets define the look and Outline Color/Width below are read-only. (Internally every outline uses a lightweight material instance either way, so a unique stencil reference can be assigned automatically — the shared assets are never modified.)")]
         private bool useMaterialInstances;
 
         [Header("Appearance")]
@@ -158,10 +159,11 @@ namespace reromanlee.MeshOutline
         }
 
         /// <summary>
-        /// When true, this outline renders with its own material instances so color/width can be
-        /// set per object. When false, the shared material assets are used as-is (best for
-        /// batching) and are treated as read-only: <see cref="OutlineColor"/> and
-        /// <see cref="OutlineWidth"/> mirror them but never modify them.
+        /// When true, this outline can have its own <see cref="OutlineColor"/> and
+        /// <see cref="OutlineWidth"/>. When false, the shared material assets define the look:
+        /// the properties mirror them but never modify them. Internally every outline renders
+        /// through lightweight material instances either way, so a unique stencil reference can
+        /// be assigned automatically (SRP Batcher compatible — no per-frame cost).
         /// </summary>
         public bool UseMaterialInstances
         {
@@ -353,43 +355,79 @@ namespace reromanlee.MeshOutline
         }
 
         /// <summary>
-        /// Assigns [mask, fill] to the renderer, creating or destroying per-object material
-        /// instances according to <see cref="useMaterialInstances"/>, then syncs color/width.
+        /// Automatically assigned stencil reference (1..255, round-robin) that makes this
+        /// outline's stencil writes distinguishable from every other outline's, which is what
+        /// lets overlapping outlines resolve correctly with zero manual setup. Not serialized:
+        /// refs are (re)assigned per session in <see cref="EnsureStencilRef"/>.
+        /// </summary>
+        [System.NonSerialized] private int assignedStencilRef;
+        private static int nextStencilRef;
+
+        private void EnsureStencilRef()
+        {
+            if (assignedStencilRef != 0) return;
+            // 255 usable values (0 is the cleared stencil state). With more than 255 outlines
+            // alive at once, refs repeat; two same-ref outlines only show a minor artifact if
+            // they also overlap on screen.
+            assignedStencilRef = 1 + (nextStencilRef++ % 255);
+        }
+
+        /// <summary>
+        /// Assigns [mask, fill] to the renderer. Every outline always renders through internal
+        /// material instances: they carry the automatically assigned per-object stencil
+        /// reference, and (when <see cref="useMaterialInstances"/> is enabled) the per-object
+        /// color/width. The shared material assets are never modified.
         /// </summary>
         private void ApplyMaterials()
         {
             if (outlineMeshRenderer == null) return;
 
-            Material mask = outlineMaskMaterial;
-            Material fill = outlineFillMaterial;
+            EnsureStencilRef();
 
-            if (useMaterialInstances)
-            {
-                if (maskMaterialInstance == null && outlineMaskMaterial != null)
-                {
-                    maskMaterialInstance = new Material(outlineMaskMaterial) { name = outlineMaskMaterial.name + " (instance)" };
-                }
-                if (fillMaterialInstance == null && outlineFillMaterial != null)
-                {
-                    fillMaterialInstance = new Material(outlineFillMaterial) { name = outlineFillMaterial.name + " (instance)" };
-                }
-                if (maskMaterialInstance != null) mask = maskMaterialInstance;
-                if (fillMaterialInstance != null) fill = fillMaterialInstance;
-            }
-            else
-            {
-                DestroyMaterialInstances();
-            }
+            Material mask = EnsureInstance(ref maskMaterialInstance, outlineMaskMaterial);
+            Material fill = EnsureInstance(ref fillMaterialInstance, outlineFillMaterial);
 
             // sharedMaterials: never trigger Unity's implicit .materials instancing.
-            outlineMeshRenderer.sharedMaterials = new[] { mask, fill };
+            outlineMeshRenderer.sharedMaterials = new[]
+            {
+                mask != null ? mask : outlineMaskMaterial,
+                fill != null ? fill : outlineFillMaterial
+            };
             ApplyOutlineProperties();
         }
 
         /// <summary>
-        /// Writes <see cref="outlineColor"/> and <see cref="outlineWidth"/> to the per-object
-        /// material instances. With material instances disabled this is a no-op: the shared
-        /// material assets define the look and are never modified by this component.
+        /// Creates (or refreshes) the internal instance of <paramref name="shared"/> and stamps
+        /// the per-object stencil reference on it. Existing instances are re-synced from the
+        /// shared asset so edits to the shared material (color, width, ZTest, ...) propagate.
+        /// </summary>
+        private Material EnsureInstance(ref Material instance, Material shared)
+        {
+            if (shared == null) return null;
+
+            if (instance == null)
+            {
+                instance = new Material(shared) { name = shared.name + " (instance)" };
+            }
+            else
+            {
+                // Follow the shared asset: shader swaps and property edits both propagate.
+                if (instance.shader != shared.shader) instance.shader = shared.shader;
+                instance.CopyPropertiesFromMaterial(shared);
+            }
+
+            if (instance.HasProperty(StencilRefId))
+            {
+                instance.SetFloat(StencilRefId, assignedStencilRef);
+            }
+            return instance;
+        }
+
+        /// <summary>
+        /// Writes <see cref="outlineColor"/> and <see cref="outlineWidth"/> to the internal
+        /// material instances. With <see cref="useMaterialInstances"/> disabled this is a no-op:
+        /// the instances already mirror the shared assets (copied in <see cref="EnsureInstance"/>),
+        /// and the shared assets themselves are never modified.
         /// </summary>
         private void ApplyOutlineProperties()
         {
@@ -471,6 +509,10 @@ namespace reromanlee.MeshOutline
                 // Deferred: DestroyImmediate is not allowed from OnValidate/OnDestroy in edit mode.
                 EditorApplication.delayCall += () =>
                 {
+                    // Never destroy across a play mode transition: Unity preserves instance IDs
+                    // when it reloads the scene for play mode, so a stale deferred call would
+                    // resolve to (and delete!) the freshly loaded play-mode outline objects.
+                    if (EditorApplication.isPlayingOrWillChangePlaymode) return;
                     if (obj != null) DestroyImmediate(obj);
                 };
                 return;
@@ -479,8 +521,32 @@ namespace reromanlee.MeshOutline
             Destroy(obj);
         }
 
+        /// <summary>
+        /// Refreshes per-object state after scene loads, play mode transitions and domain
+        /// reloads: reassigns the (non-serialized) automatic stencil reference and re-syncs the
+        /// internal material instances from the shared assets. Runs once per enable — the
+        /// component still has zero per-frame cost.
+        /// </summary>
+        private void OnEnable()
+        {
+            if (IsCreated) ApplyMaterials();
+        }
+
         private void OnDestroy()
         {
+#if UNITY_EDITOR
+            // [ExecuteAlways] also invokes OnDestroy during engine teardowns that are NOT a real
+            // component removal: entering/exiting play mode and closing/unloading scenes. Running
+            // Remove() there used to schedule deferred DestroyImmediate calls whose captured
+            // references resolve (via Unity's preserved instance IDs) to the freshly reloaded
+            // outline objects — deleting every outline the moment play mode started. Only clean
+            // up when the component itself is genuinely being removed.
+            if (!Application.isPlaying)
+            {
+                if (EditorApplication.isPlayingOrWillChangePlaymode) return; // play transition
+                if (!gameObject.scene.isLoaded) return;                      // scene closing/unloading
+            }
+#endif
             // Clean up the generated object, mesh and material instances when the component is
             // removed (works in edit mode thanks to [ExecuteAlways]).
             Remove();

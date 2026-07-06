@@ -1,15 +1,26 @@
-// Outline fill pass: extrudes vertices along smooth normals baked into TEXCOORD3 (UV4)
-// and draws the outline color only where the stencil mask did NOT write (outside the
-// original silhouette).
+// Outline fill pass: extrudes vertices in the view-space XY plane (perpendicular to
+// the view direction) using smooth normals baked into TEXCOORD3 (UV4), and draws the
+// outline color only where the stencil mask did NOT write (outside the original
+// silhouette).
 //
-// Multi-object correctness: the mask and fill share the SAME render queue
-// (Transparent+100). Because both materials sit on one renderer (slots [mask, fill]),
-// Unity draws each object's mask immediately followed by its fill, object by object,
-// sorted back-to-front. The fill's "Fail Zero" stencil op then erases the object's own
-// silhouette from the stencil buffer (the extruded fill geometry fully covers it), so
-// every object starts with a clean stencil and outlines can never clip each other.
-// Depth (ZTest LEqual by default) is the only thing that decides occlusion — which is
-// exactly the expected behavior, with no manual sorting or per-object stencil refs.
+// Depth correctness: the extrusion deliberately leaves view-space Z untouched, so the
+// projection matrix (which derives clip Z, and clip W in perspective, purely from view
+// Z) places the extruded geometry at EXACTLY the same depth as the real surface it
+// came from — regardless of the object's distance or which way its normal faces. This
+// matters because the screen-space width scales with distance (to stay visually
+// constant), so a naive extrusion along the full 3D normal can push a far object's
+// fill geometry to an arbitrary, incorrect depth; extruding in view-space XY only
+// makes that impossible by construction.
+//
+// Multi-object correctness: the mask renders at Transparent+100 and the fill at
+// Transparent+110, so ALL masks are guaranteed to render before ANY fill — a
+// deterministic order that no pipeline sorting can break. Each Outline component
+// automatically assigns its object a unique _StencilRef (on internal material
+// instances), and the masks use ZTest LEqual so each object only stamps the pixels
+// where it is actually visible. A fill therefore skips only its OWN silhouette
+// (Comp NotEqual its own ref), draws over other objects' visible bodies when it is
+// nearer (depth passes), and is hidden behind them when it is farther (depth fails).
+// Per-pixel correct, fully automatic — no sorting layers, no manual priorities.
 //
 // SubShader 1: URP (HLSL, SRP Batcher compatible).
 // SubShader 2: Built-in RP (CG). Unity picks the one matching the active pipeline.
@@ -18,6 +29,8 @@ Shader "reromanlee/OutlineFill" {
 		// LessEqual (4) by default: outlines are occluded by scene geometry like any
 		// normal object. Set to Always (8) for an X-ray outline visible through walls.
 		[Enum(UnityEngine.Rendering.CompareFunction)] _ZTest("ZTest", Float) = 4
+		// Assigned automatically per object by the Outline component; the value on the
+		// shared material asset is only a fallback and never needs manual editing.
 		[IntRange] _StencilRef("Stencil Reference", Range(0, 255)) = 1
 		_OutlineColor("Outline Color", Color) = (1, 1, 1, 1)
 		_OutlineWidth("Outline Width", Range(0, 10)) = 2
@@ -27,8 +40,8 @@ Shader "reromanlee/OutlineFill" {
 	SubShader {
 		Tags {
 			"RenderPipeline" = "UniversalPipeline"
-			// MUST match OutlineMask's queue so mask+fill interleave per object.
-			"Queue" = "Transparent+100"
+			// One queue step after OutlineMask: all masks render before all fills.
+			"Queue" = "Transparent+110"
 			"RenderType" = "Transparent"
 			// Extrusion math relies on per-object transforms; dynamic/static batching
 			// pre-transforms vertices and would break it. SRP Batcher and GPU
@@ -47,10 +60,6 @@ Shader "reromanlee/OutlineFill" {
 			Stencil {
 				Ref [_StencilRef]
 				Comp NotEqual
-				// Where the stencil test fails (inside this object's own silhouette),
-				// zero the stencil. This "self-cleans" the buffer after the object is
-				// done, so the next outlined object renders against a clean stencil.
-				Fail Zero
 			}
 
 			HLSLPROGRAM
@@ -95,7 +104,17 @@ Shader "reromanlee/OutlineFill" {
 				// Orthographic (unity_OrthoParams.w == 1): scale by the camera's ortho
 				// size instead, so the width stays constant regardless of distance.
 				float scale = lerp(-positionVS.z, unity_OrthoParams.y, unity_OrthoParams.w);
-				positionVS += normalVS * scale * _OutlineWidth / 1000.0;
+
+				// Extrude ONLY in the view-space XY plane (perpendicular to the view
+				// direction) and leave view-space Z exactly as the source surface's.
+				// The projection matrix derives clip Z (and, in perspective, clip W)
+				// purely from view-space Z, so this guarantees the fill's depth is
+				// IDENTICAL to the real surface it came from — no matter the object's
+				// distance or which way its normal faces. That's what makes occlusion
+				// between outlined objects correct regardless of scale: a far object's
+				// fill can never end up depth-testing as if it were nearer than a
+				// close object, because its depth never actually changes.
+				positionVS.xy += normalVS.xy * scale * _OutlineWidth / 1000.0;
 
 				output.positionCS = TransformWViewToHClip(positionVS);
 				output.color = _OutlineColor;
@@ -112,7 +131,7 @@ Shader "reromanlee/OutlineFill" {
 	// ------------------------------------------------------------- Built-in RP
 	SubShader {
 		Tags {
-			"Queue" = "Transparent+100"
+			"Queue" = "Transparent+110"
 			"RenderType" = "Transparent"
 			"IgnoreProjector" = "True"
 			"DisableBatching" = "True"
@@ -128,9 +147,6 @@ Shader "reromanlee/OutlineFill" {
 			Stencil {
 				Ref [_StencilRef]
 				Comp NotEqual
-				// Self-clean: zero this object's silhouette out of the stencil buffer
-				// so the next outlined object is unaffected (see header comment).
-				Fail Zero
 			}
 
 			CGPROGRAM
@@ -170,7 +186,13 @@ Shader "reromanlee/OutlineFill" {
 				// Perspective: constant screen-space width. Orthographic: constant
 				// width via the camera's ortho size (unity_OrthoParams.w is 1 if ortho).
 				float scale = lerp(-viewPosition.z, unity_OrthoParams.y, unity_OrthoParams.w);
-				output.position = UnityViewToClipPos(viewPosition + viewNormal * scale * _OutlineWidth / 1000.0);
+
+				// Extrude ONLY in the view-space XY plane, leaving view-space Z exactly
+				// as the source surface's — see the URP pass above for why this is what
+				// makes cross-object depth ordering correct at any distance/normal angle.
+				viewPosition.xy += viewNormal.xy * scale * _OutlineWidth / 1000.0;
+
+				output.position = UnityViewToClipPos(viewPosition);
 				output.color = _OutlineColor;
 				return output;
 			}

@@ -1,12 +1,15 @@
 // Outline mask pass: writes the object's silhouette into the stencil buffer without
 // drawing any color, so the fill pass can render only OUTSIDE the silhouette.
 //
-// Multi-object correctness: this shader shares its render queue (Transparent+100) with
-// OutlineFill. Both materials sit on the same renderer as [mask, fill], so Unity draws
-// each object's mask immediately followed by its own fill (objects sorted back-to-front),
-// and the fill's "Fail Zero" op erases the silhouette from the stencil afterwards.
-// Result: outlines never clip each other and occlusion is decided purely by depth —
-// fully automatic, no sorting layers or per-object stencil references needed.
+// Multi-object correctness: masks render at Transparent+100 and fills at
+// Transparent+110, so ALL masks are guaranteed to render before ANY fill — a
+// deterministic order that no pipeline sorting can break. Each Outline component
+// automatically assigns its object a unique _StencilRef (on internal material
+// instances). With ZTest LEqual (the default) a mask only stamps the pixels where
+// its object is actually VISIBLE, so overlapping silhouettes resolve per-pixel to
+// whichever object is truly in front. Fills then skip only their OWN ref, letting
+// nearer outlines draw over farther objects while depth hides farther outlines
+// behind nearer ones. Fully automatic — no sorting layers or manual priorities.
 //
 // Both SubShaders use explicit (programmable) passes: fixed-function passes are not
 // supported by SRPs and don't work with GPU instancing or single-pass instanced VR.
@@ -16,8 +19,11 @@
 Shader "reromanlee/OutlineMask" {
 	Properties {
 		// LessEqual (4) by default: only the visible part of the silhouette is masked,
-		// matching the fill's depth-correct behavior. Set to Always (8) for X-ray mode.
+		// which is what makes overlapping outlines resolve correctly per pixel.
+		// Set to Always (8) for X-ray mode.
 		[Enum(UnityEngine.Rendering.CompareFunction)] _ZTest("ZTest", Float) = 4
+		// Assigned automatically per object by the Outline component; the value on the
+		// shared material asset is only a fallback and never needs manual editing.
 		[IntRange] _StencilRef("Stencil Reference", Range(0, 255)) = 1
 	}
 
@@ -25,11 +31,9 @@ Shader "reromanlee/OutlineMask" {
 	SubShader {
 		Tags {
 			"RenderPipeline" = "UniversalPipeline"
-			// MUST match OutlineFill's queue so mask+fill interleave per object.
+			// One queue step before OutlineFill: all masks render before all fills.
 			"Queue" = "Transparent+100"
 			"RenderType" = "Transparent"
-			// Keep every mask an individual draw so the per-object mask->fill order is
-			// never disturbed by dynamic batching. SRP Batcher/instancing still work.
 			"DisableBatching" = "True"
 		}
 		Pass {
