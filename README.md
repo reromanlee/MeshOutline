@@ -6,7 +6,7 @@ MeshOutline draws crisp, constant-width silhouette outlines around any `MeshFilt
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Unity](https://img.shields.io/badge/Unity-6.0%2B-black.svg) ![Pipelines](https://img.shields.io/badge/Render%20Pipeline-URP%20%7C%20Built--in-blue.svg)
 
----
+![Mesh outline showcase](.github/readme-outline-showcase.gif)
 
 ## Why MeshOutline?
 
