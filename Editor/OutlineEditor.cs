@@ -12,9 +12,69 @@ namespace reromanlee.MeshOutline.Editor
     [CanEditMultipleObjects]
     public class OutlineEditor : UnityEditor.Editor
     {
+        private SerializedProperty maskMaterialProp;
+        private SerializedProperty fillMaterialProp;
+        private SerializedProperty useMaterialInstancesProp;
+        private SerializedProperty outlineColorProp;
+        private SerializedProperty outlineWidthProp;
+        private SerializedProperty syncChildOutlinesProp;
+        private SerializedProperty hideGeneratedObjectProp;
+
+        private void OnEnable()
+        {
+            maskMaterialProp = serializedObject.FindProperty("outlineMaskMaterial");
+            fillMaterialProp = serializedObject.FindProperty("outlineFillMaterial");
+            useMaterialInstancesProp = serializedObject.FindProperty("useMaterialInstances");
+            outlineColorProp = serializedObject.FindProperty("outlineColor");
+            outlineWidthProp = serializedObject.FindProperty("outlineWidth");
+            syncChildOutlinesProp = serializedObject.FindProperty("syncChildOutlines");
+            hideGeneratedObjectProp = serializedObject.FindProperty("hideGeneratedObjectInHierarchy");
+        }
+
         public override void OnInspectorGUI()
         {
-            DrawDefaultInspector();
+            // With instances off, the shared material assets are the source of truth; keep the
+            // (read-only) color/width fields mirroring their current values.
+            foreach (Object t in targets)
+            {
+                var o = (Outline)t;
+                if (!o.UseMaterialInstances) o.SyncPropertiesFromMaterials();
+            }
+
+            serializedObject.Update();
+
+            using (new EditorGUI.DisabledScope(true))
+            {
+                EditorGUILayout.ObjectField("Script",
+                    MonoScript.FromMonoBehaviour((MonoBehaviour)target), typeof(MonoScript), false);
+            }
+
+            EditorGUILayout.PropertyField(maskMaterialProp);
+            EditorGUILayout.PropertyField(fillMaterialProp);
+            EditorGUILayout.PropertyField(useMaterialInstancesProp);
+
+            // Color/width are only editable with per-object material instances. Without them the
+            // shared material assets (which may live inside the read-only package folder) define
+            // the look, and this component must never modify them.
+            bool instancesEnabled = useMaterialInstancesProp.boolValue
+                                    && !useMaterialInstancesProp.hasMultipleDifferentValues;
+            using (new EditorGUI.DisabledScope(!instancesEnabled))
+            {
+                EditorGUILayout.PropertyField(outlineColorProp);
+                EditorGUILayout.PropertyField(outlineWidthProp);
+            }
+            if (!instancesEnabled)
+            {
+                EditorGUILayout.HelpBox(
+                    "Color and width come from the shared material assets and are shown read-only " +
+                    "here. Enable 'Use Material Instances' to edit them per object.",
+                    MessageType.None);
+            }
+
+            EditorGUILayout.PropertyField(syncChildOutlinesProp);
+            EditorGUILayout.PropertyField(hideGeneratedObjectProp);
+
+            serializedObject.ApplyModifiedProperties();
 
             EditorGUILayout.Space();
             DrawStatus();

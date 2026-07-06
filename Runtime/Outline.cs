@@ -36,14 +36,14 @@ namespace reromanlee.MeshOutline
         [SerializeField, Tooltip("Material for the fill pass (extrudes along baked smooth normals and draws the outline color).")]
         private Material outlineFillMaterial;
 
-        [SerializeField, Tooltip("Create per-object instances of the outline materials so this outline can have its own color and width. When disabled, Outline Color/Width below write to the shared material assets and affect every outline that uses them.")]
+        [SerializeField, Tooltip("Create per-object instances of the outline materials so this outline can have its own color and width. When disabled, the shared material assets define the look and Outline Color/Width below are read-only (the shared assets are never modified by this component).")]
         private bool useMaterialInstances;
 
         [Header("Appearance")]
-        [SerializeField, Tooltip("Synced to the fill material's _OutlineColor.")]
+        [SerializeField, Tooltip("Synced to the fill material instance's _OutlineColor. Editable only when Use Material Instances is enabled; otherwise it mirrors the shared material.")]
         private Color outlineColor = Color.white;
 
-        [SerializeField, Min(0f), Tooltip("Synced to the outline materials' _OutlineWidth.")]
+        [SerializeField, Min(0f), Tooltip("Synced to the outline material instances' _OutlineWidth. Editable only when Use Material Instances is enabled; otherwise it mirrors the shared material.")]
         private float outlineWidth = 2f;
 
         [Header("Behaviour")]
@@ -109,24 +109,59 @@ namespace reromanlee.MeshOutline
             }
         }
 
-        /// <summary>Outline color, synced to the fill material (see <see cref="UseMaterialInstances"/>).</summary>
+        /// <summary>
+        /// Outline color. With <see cref="UseMaterialInstances"/> enabled this is per-object and
+        /// written to the fill material instance. With it disabled, the shared material asset is
+        /// the source of truth: the getter reads from it and the setter has no visual effect
+        /// (shared assets are never modified by this component).
+        /// </summary>
         public Color OutlineColor
         {
-            get => outlineColor;
-            set { outlineColor = value; ApplyOutlineProperties(); }
-        }
-
-        /// <summary>Outline width, synced to the outline materials (see <see cref="UseMaterialInstances"/>).</summary>
-        public float OutlineWidth
-        {
-            get => outlineWidth;
-            set { outlineWidth = Mathf.Max(0f, value); ApplyOutlineProperties(); }
+            get
+            {
+                if (!useMaterialInstances && outlineFillMaterial != null && outlineFillMaterial.HasProperty(OutlineColorId))
+                {
+                    return outlineFillMaterial.GetColor(OutlineColorId);
+                }
+                return outlineColor;
+            }
+            set
+            {
+                outlineColor = value;
+                if (!useMaterialInstances) { WarnSharedMaterialsAreReadOnly(); return; }
+                ApplyOutlineProperties();
+            }
         }
 
         /// <summary>
-        /// When true, this outline renders with its own material instances so color/width can be set
-        /// per object. When false, the shared material assets are used (best for batching) and
-        /// color/width changes affect every outline sharing them.
+        /// Outline width. With <see cref="UseMaterialInstances"/> enabled this is per-object and
+        /// written to the outline material instances. With it disabled, the shared material asset
+        /// is the source of truth: the getter reads from it and the setter has no visual effect
+        /// (shared assets are never modified by this component).
+        /// </summary>
+        public float OutlineWidth
+        {
+            get
+            {
+                if (!useMaterialInstances && outlineFillMaterial != null && outlineFillMaterial.HasProperty(OutlineWidthId))
+                {
+                    return outlineFillMaterial.GetFloat(OutlineWidthId);
+                }
+                return outlineWidth;
+            }
+            set
+            {
+                outlineWidth = Mathf.Max(0f, value);
+                if (!useMaterialInstances) { WarnSharedMaterialsAreReadOnly(); return; }
+                ApplyOutlineProperties();
+            }
+        }
+
+        /// <summary>
+        /// When true, this outline renders with its own material instances so color/width can be
+        /// set per object. When false, the shared material assets are used as-is (best for
+        /// batching) and are treated as read-only: <see cref="OutlineColor"/> and
+        /// <see cref="OutlineWidth"/> mirror them but never modify them.
         /// </summary>
         public bool UseMaterialInstances
         {
@@ -134,6 +169,9 @@ namespace reromanlee.MeshOutline
             set
             {
                 if (useMaterialInstances == value) return;
+                // When enabling, seed the per-object values from the shared materials so the
+                // freshly created instances start out looking identical.
+                if (value) SyncPropertiesFromMaterials();
                 useMaterialInstances = value;
                 ApplyMaterials();
             }
@@ -349,40 +387,49 @@ namespace reromanlee.MeshOutline
         }
 
         /// <summary>
-        /// Writes <see cref="outlineColor"/> and <see cref="outlineWidth"/> to the active outline
-        /// materials, keeping the inspector fields and the materials in sync. With material
-        /// instances disabled this intentionally edits the shared material assets, affecting all
-        /// outlines that use them.
+        /// Writes <see cref="outlineColor"/> and <see cref="outlineWidth"/> to the per-object
+        /// material instances. With material instances disabled this is a no-op: the shared
+        /// material assets define the look and are never modified by this component.
         /// </summary>
         private void ApplyOutlineProperties()
         {
-            Material fill = useMaterialInstances && fillMaterialInstance != null ? fillMaterialInstance : outlineFillMaterial;
-            Material mask = useMaterialInstances && maskMaterialInstance != null ? maskMaterialInstance : outlineMaskMaterial;
+            if (!useMaterialInstances) return;
 
-            if (fill != null)
+            if (fillMaterialInstance != null)
             {
-                if (fill.HasProperty(OutlineColorId)) fill.SetColor(OutlineColorId, outlineColor);
-                if (fill.HasProperty(OutlineWidthId)) fill.SetFloat(OutlineWidthId, outlineWidth);
-#if UNITY_EDITOR
-                if (!Application.isPlaying && !useMaterialInstances) EditorUtility.SetDirty(fill);
-#endif
+                if (fillMaterialInstance.HasProperty(OutlineColorId)) fillMaterialInstance.SetColor(OutlineColorId, outlineColor);
+                if (fillMaterialInstance.HasProperty(OutlineWidthId)) fillMaterialInstance.SetFloat(OutlineWidthId, outlineWidth);
             }
-            if (mask != null && mask.HasProperty(OutlineWidthId))
+            if (maskMaterialInstance != null && maskMaterialInstance.HasProperty(OutlineWidthId))
             {
-                mask.SetFloat(OutlineWidthId, outlineWidth);
-#if UNITY_EDITOR
-                if (!Application.isPlaying && !useMaterialInstances) EditorUtility.SetDirty(mask);
-#endif
+                maskMaterialInstance.SetFloat(OutlineWidthId, outlineWidth);
             }
         }
 
-        /// <summary>Reads current color/width from the fill material into the inspector fields.</summary>
-        private void PullPropertiesFromMaterials()
+        /// <summary>
+        /// Reads the current color/width from the active fill material into the serialized fields,
+        /// so the (read-only) inspector fields mirror the shared material when instances are off,
+        /// and so freshly enabled instances start out identical to the shared look.
+        /// </summary>
+        public void SyncPropertiesFromMaterials()
         {
             Material fill = useMaterialInstances && fillMaterialInstance != null ? fillMaterialInstance : outlineFillMaterial;
             if (fill == null) return;
             if (fill.HasProperty(OutlineColorId)) outlineColor = fill.GetColor(OutlineColorId);
             if (fill.HasProperty(OutlineWidthId)) outlineWidth = fill.GetFloat(OutlineWidthId);
+        }
+
+        [System.NonSerialized] private bool warnedSharedMaterialsReadOnly;
+
+        private void WarnSharedMaterialsAreReadOnly()
+        {
+            if (warnedSharedMaterialsReadOnly) return;
+            warnedSharedMaterialsReadOnly = true;
+            Debug.LogWarning(
+                $"[{nameof(Outline)}] '{name}': OutlineColor/OutlineWidth were set while " +
+                $"{nameof(UseMaterialInstances)} is disabled. Shared material assets are read-only, " +
+                "so the change has no visual effect. Enable UseMaterialInstances for per-object " +
+                "color/width, or edit the shared material asset directly.", this);
         }
 
         /// <summary>
@@ -449,7 +496,7 @@ namespace reromanlee.MeshOutline
         {
             if (outlineMaskMaterial == null) outlineMaskMaterial = FindDefaultMaterial("OutlineMask");
             if (outlineFillMaterial == null) outlineFillMaterial = FindDefaultMaterial("OutlineFill");
-            PullPropertiesFromMaterials();
+            SyncPropertiesFromMaterials();
 
             if (outlineMaskMaterial == null || outlineFillMaterial == null) return;
 
@@ -472,6 +519,9 @@ namespace reromanlee.MeshOutline
             if (!IsCreated) return;
 
             ApplyMaterials();
+            // With instances off the shared materials are the source of truth; keep the
+            // (read-only) inspector fields mirroring them.
+            if (!useMaterialInstances) SyncPropertiesFromMaterials();
             ApplyHideFlags();
 
             if (IsBakeStale)

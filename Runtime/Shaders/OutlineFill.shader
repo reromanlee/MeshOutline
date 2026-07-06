@@ -2,11 +2,22 @@
 // and draws the outline color only where the stencil mask did NOT write (outside the
 // original silhouette).
 //
+// Multi-object correctness: the mask and fill share the SAME render queue
+// (Transparent+100). Because both materials sit on one renderer (slots [mask, fill]),
+// Unity draws each object's mask immediately followed by its fill, object by object,
+// sorted back-to-front. The fill's "Fail Zero" stencil op then erases the object's own
+// silhouette from the stencil buffer (the extruded fill geometry fully covers it), so
+// every object starts with a clean stencil and outlines can never clip each other.
+// Depth (ZTest LEqual by default) is the only thing that decides occlusion — which is
+// exactly the expected behavior, with no manual sorting or per-object stencil refs.
+//
 // SubShader 1: URP (HLSL, SRP Batcher compatible).
 // SubShader 2: Built-in RP (CG). Unity picks the one matching the active pipeline.
 Shader "reromanlee/OutlineFill" {
 	Properties {
-		[Enum(UnityEngine.Rendering.CompareFunction)] _ZTest("ZTest", Float) = 0
+		// LessEqual (4) by default: outlines are occluded by scene geometry like any
+		// normal object. Set to Always (8) for an X-ray outline visible through walls.
+		[Enum(UnityEngine.Rendering.CompareFunction)] _ZTest("ZTest", Float) = 4
 		[IntRange] _StencilRef("Stencil Reference", Range(0, 255)) = 1
 		_OutlineColor("Outline Color", Color) = (1, 1, 1, 1)
 		_OutlineWidth("Outline Width", Range(0, 10)) = 2
@@ -16,7 +27,8 @@ Shader "reromanlee/OutlineFill" {
 	SubShader {
 		Tags {
 			"RenderPipeline" = "UniversalPipeline"
-			"Queue" = "Transparent+110"
+			// MUST match OutlineMask's queue so mask+fill interleave per object.
+			"Queue" = "Transparent+100"
 			"RenderType" = "Transparent"
 			// Extrusion math relies on per-object transforms; dynamic/static batching
 			// pre-transforms vertices and would break it. SRP Batcher and GPU
@@ -35,6 +47,10 @@ Shader "reromanlee/OutlineFill" {
 			Stencil {
 				Ref [_StencilRef]
 				Comp NotEqual
+				// Where the stencil test fails (inside this object's own silhouette),
+				// zero the stencil. This "self-cleans" the buffer after the object is
+				// done, so the next outlined object renders against a clean stencil.
+				Fail Zero
 			}
 
 			HLSLPROGRAM
@@ -96,7 +112,7 @@ Shader "reromanlee/OutlineFill" {
 	// ------------------------------------------------------------- Built-in RP
 	SubShader {
 		Tags {
-			"Queue" = "Transparent+110"
+			"Queue" = "Transparent+100"
 			"RenderType" = "Transparent"
 			"IgnoreProjector" = "True"
 			"DisableBatching" = "True"
@@ -112,6 +128,9 @@ Shader "reromanlee/OutlineFill" {
 			Stencil {
 				Ref [_StencilRef]
 				Comp NotEqual
+				// Self-clean: zero this object's silhouette out of the stencil buffer
+				// so the next outlined object is unaffected (see header comment).
+				Fail Zero
 			}
 
 			CGPROGRAM
