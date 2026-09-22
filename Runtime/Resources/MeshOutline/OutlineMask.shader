@@ -1,29 +1,20 @@
-// Outline mask pass: writes the object's silhouette into the stencil buffer without
-// drawing any color, so the fill pass can render only OUTSIDE the silhouette.
+// Outline mask pass: writes the object's silhouette into the stencil buffer without drawing
+// any color, so the fill pass can draw only OUTSIDE the silhouette.
 //
-// Multi-object correctness: masks render at Transparent+100 and fills at
-// Transparent+110, so ALL masks are guaranteed to render before ANY fill — a
-// deterministic order that no pipeline sorting can break. Each Outline component
-// automatically assigns its object a unique _StencilRef (on internal material
-// instances). With ZTest LEqual (the default) a mask only stamps the pixels where
-// its object is actually VISIBLE, so overlapping silhouettes resolve per-pixel to
-// whichever object is truly in front. Fills then skip only their OWN ref, letting
-// nearer outlines draw over farther objects while depth hides farther outlines
-// behind nearer ones. Fully automatic — no sorting layers or manual priorities.
+// Masks render at Transparent+100 and fills at Transparent+110, so every mask is stamped
+// before any fill. Each ObjectOutline has its own _StencilRef, and with ZTest LEqual (the
+// default) a mask only stamps pixels where its object is actually visible, so overlapping
+// silhouettes resolve per pixel to whichever object is in front.
 //
-// Both SubShaders use explicit (programmable) passes: fixed-function passes are not
-// supported by SRPs and don't work with GPU instancing or single-pass instanced VR.
+// Both SubShaders use programmable passes: fixed-function passes aren't supported by SRPs
+// and don't work with GPU instancing or single-pass instanced VR.
 //
-// SubShader 1: URP (HLSL, SRP Batcher compatible).
-// SubShader 2: Built-in RP (CG). Unity picks the one matching the active pipeline.
-Shader "reromanlee/OutlineMask" {
+// SubShader 1: URP (SRP Batcher compatible). SubShader 2: Built-in RP.
+Shader "Hidden/MeshOutline/Mask" {
 	Properties {
-		// LessEqual (4) by default: only the visible part of the silhouette is masked,
-		// which is what makes overlapping outlines resolve correctly per pixel.
-		// Set to Always (8) for X-ray mode.
+		// Driven by ObjectOutline.Occlusion: LessEqual (4) = Normal, Always (8) = X-Ray.
 		[Enum(UnityEngine.Rendering.CompareFunction)] _ZTest("ZTest", Float) = 4
-		// Assigned automatically per object by the Outline component; the value on the
-		// shared material asset is only a fallback and never needs manual editing.
+		// Assigned per outline by ObjectOutline.
 		[IntRange] _StencilRef("Stencil Reference", Range(0, 255)) = 1
 	}
 
@@ -31,10 +22,9 @@ Shader "reromanlee/OutlineMask" {
 	SubShader {
 		Tags {
 			"RenderPipeline" = "UniversalPipeline"
-			// One queue step before OutlineFill: all masks render before all fills.
 			"Queue" = "Transparent+100"
 			"RenderType" = "Transparent"
-			"DisableBatching" = "True"
+			"IgnoreProjector" = "True"
 		}
 		Pass {
 			Name "Mask"
@@ -44,10 +34,10 @@ Shader "reromanlee/OutlineMask" {
 			ZWrite Off
 			ColorMask 0
 			// The LEqual test must pass at EXACTLY the depth the source object wrote, but a
-			// batched/pre-transformed source renderer can land a last-bit different depth.
-			// A small pull-toward-camera bias makes the stamp reliable; an over-generous
-			// stamp is harmless (it only suppresses this object's own fill at pixels where
-			// that fill would depth-fail anyway — other fills ignore foreign refs).
+			// differently transformed source (batching, GPU skinning) can land a last-bit
+			// different depth. A small pull toward the camera makes the stamp reliable; an
+			// over-generous stamp is harmless (it only suppresses this outline's own fill where
+			// that fill would fail the depth test anyway).
 			Offset -1, -1
 
 			Stencil {
@@ -72,8 +62,8 @@ Shader "reromanlee/OutlineMask" {
 				UNITY_VERTEX_OUTPUT_STEREO
 			};
 
-			// No material properties are read by the program (_ZTest/_StencilRef are
-			// render state only), so an empty UnityPerMaterial keeps SRP Batcher happy.
+			// No material properties are read by the program (_ZTest/_StencilRef are render
+			// state only); an empty UnityPerMaterial keeps the SRP Batcher happy.
 			CBUFFER_START(UnityPerMaterial)
 			CBUFFER_END
 
@@ -98,7 +88,6 @@ Shader "reromanlee/OutlineMask" {
 			"Queue" = "Transparent+100"
 			"RenderType" = "Transparent"
 			"IgnoreProjector" = "True"
-			"DisableBatching" = "True"
 		}
 		Pass {
 			Name "Mask"
@@ -106,7 +95,7 @@ Shader "reromanlee/OutlineMask" {
 			ZTest [_ZTest]
 			ZWrite Off
 			ColorMask 0
-			// Depth-precision guard — see the URP pass above.
+			// Depth-precision guard: see the URP pass above.
 			Offset -1, -1
 
 			Stencil {

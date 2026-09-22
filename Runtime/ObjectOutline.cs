@@ -11,7 +11,7 @@ namespace reromanlee.MeshOutline
     /// Bakes a prebaked outline for the <see cref="MeshFilter"/> on this GameObject.
     ///
     /// A hidden child GameObject ("Outline (generated)") is created in the editor with a copy of
-    /// the source mesh. Smooth (position-averaged) normals are baked into UV channel 3, which the
+    /// the source mesh. Smooth (position-averaged) normals are baked into its NORMAL channel, which the
     /// outline fill shader uses to extrude a crack-free silhouette. Because everything is baked at
     /// edit time and serialized into the scene, the component has zero per-frame runtime cost:
     /// no Update loop, no post-processing, no render textures, no command buffers.
@@ -22,9 +22,6 @@ namespace reromanlee.MeshOutline
     public class ObjectOutline : MonoBehaviour
     {
         private const string GeneratedName = "Outline (generated)";
-
-        /// <summary>UV channel (TEXCOORD3) the smooth normals are baked into. Must match the fill shader.</summary>
-        private const int SmoothNormalsUVChannel = 3;
 
         private static readonly int OutlineColorId = Shader.PropertyToID("_OutlineColor");
         private static readonly int OutlineWidthId = Shader.PropertyToID("_OutlineWidth");
@@ -259,7 +256,7 @@ namespace reromanlee.MeshOutline
 
         /// <summary>
         /// Copies the source mesh into the (reused) generated mesh and bakes smooth normals into
-        /// UV channel 3. Reusing <see cref="generatedMesh"/> avoids leaking a Mesh on every rebake.
+        /// its NORMAL channel. Reusing <see cref="generatedMesh"/> avoids leaking a Mesh on every rebake.
         /// </summary>
         private void Bake()
         {
@@ -293,19 +290,17 @@ namespace reromanlee.MeshOutline
             // stencil mask pass, then the extruded fill pass.
             generatedMesh.triangles = source.triangles;
 
-            // Keep the authored normals instead of recalculating them (cheaper and more accurate).
+            // Smooth the authored normals (recalculate only if the source has none).
             Vector3[] normals = source.normals;
-            if (normals.Length == vertices.Length)
-            {
-                generatedMesh.normals = normals;
-            }
-            else
+            if (normals.Length != vertices.Length)
             {
                 generatedMesh.RecalculateNormals();
                 normals = generatedMesh.normals;
             }
 
-            generatedMesh.SetUVs(SmoothNormalsUVChannel, CalculateSmoothNormals(vertices, normals));
+            // The outline mesh is never lit, so its NORMAL channel carries the smoothed normals
+            // the fill shader extrudes along (skinning and batching transform NORMAL, not UVs).
+            generatedMesh.SetNormals(CalculateSmoothNormals(vertices, normals));
             generatedMesh.RecalculateBounds();
 
             outlineMeshFilter.sharedMesh = generatedMesh;
