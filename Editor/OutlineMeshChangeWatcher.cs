@@ -30,14 +30,22 @@ namespace reromanlee.MeshOutline.Editor
                     case ObjectChangeKind.ChangeGameObjectOrComponentProperties:
                     {
                         stream.GetChangeGameObjectOrComponentPropertiesEvent(i, out var data);
+#if UNITY_6000_4_OR_NEWER
                         HandleChangedObject(EditorUtility.EntityIdToObject(data.entityId));
+#else
+                        HandleChangedObject(EditorUtility.InstanceIDToObject(data.instanceId));
+#endif
                         break;
                     }
                     // Fired when components are added/removed on a GameObject.
                     case ObjectChangeKind.ChangeGameObjectStructure:
                     {
                         stream.GetChangeGameObjectStructureEvent(i, out var data);
+#if UNITY_6000_4_OR_NEWER
                         var go = EditorUtility.EntityIdToObject(data.entityId) as GameObject;
+#else
+                        var go = EditorUtility.InstanceIDToObject(data.instanceId) as GameObject;
+#endif
                         if (go != null && go.TryGetComponent(out Outline outline))
                         {
                             RebakeIfStale(outline);
