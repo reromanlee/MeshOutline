@@ -5,7 +5,7 @@ namespace reromanlee.MeshOutline.Editor
 {
     /// <summary>
     /// Listens to editor-wide object change events and automatically rebakes an
-    /// <see cref="Outline"/> when the mesh on its MeshFilter is swapped, without requiring the
+    /// <see cref="ObjectOutline"/> when the mesh on its MeshFilter is swapped, without requiring the
     /// inspector to be open. This is what makes outlines "just work" when meshes change.
     /// </summary>
     [InitializeOnLoad]
@@ -46,7 +46,7 @@ namespace reromanlee.MeshOutline.Editor
 #else
                         var go = EditorUtility.InstanceIDToObject(data.instanceId) as GameObject;
 #endif
-                        if (go != null && go.TryGetComponent(out Outline outline))
+                        if (go != null && go.TryGetComponent(out ObjectOutline outline))
                         {
                             RebakeIfStale(outline);
                         }
@@ -60,16 +60,16 @@ namespace reromanlee.MeshOutline.Editor
         {
             switch (obj)
             {
-                case MeshFilter meshFilter when meshFilter.TryGetComponent(out Outline outline):
+                case MeshFilter meshFilter when meshFilter.TryGetComponent(out ObjectOutline outline):
                     RebakeIfStale(outline);
                     break;
-                case GameObject go when go.TryGetComponent(out Outline outline):
+                case GameObject go when go.TryGetComponent(out ObjectOutline outline):
                     RebakeIfStale(outline);
                     break;
             }
         }
 
-        private static void RebakeIfStale(Outline outline)
+        private static void RebakeIfStale(ObjectOutline outline)
         {
             if (outline == null || !outline.IsCreated || !outline.IsBakeStale) return;
             outline.Recalculate();

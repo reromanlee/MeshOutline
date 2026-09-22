@@ -5,10 +5,10 @@ using UnityEngine;
 namespace reromanlee.MeshOutline.Editor
 {
     /// <summary>
-    /// Inspector for <see cref="Outline"/>: shows bake status and provides
+    /// Inspector for <see cref="ObjectOutline"/>: shows bake status and provides
     /// Create/Recalculate/Remove buttons with Undo support.
     /// </summary>
-    [CustomEditor(typeof(Outline))]
+    [CustomEditor(typeof(ObjectOutline))]
     [CanEditMultipleObjects]
     public class OutlineEditor : UnityEditor.Editor
     {
@@ -37,7 +37,7 @@ namespace reromanlee.MeshOutline.Editor
             // (read-only) color/width fields mirroring their current values.
             foreach (Object t in targets)
             {
-                var o = (Outline)t;
+                var o = (ObjectOutline)t;
                 if (!o.UseMaterialInstances) o.SyncPropertiesFromMaterials();
             }
 
@@ -84,7 +84,7 @@ namespace reromanlee.MeshOutline.Editor
         private void DrawStatus()
         {
             if (targets.Length != 1) return;
-            var outline = (Outline)target;
+            var outline = (ObjectOutline)target;
 
             if (!outline.IsCreated)
             {
@@ -110,12 +110,12 @@ namespace reromanlee.MeshOutline.Editor
             bool anyCreated = false;
             foreach (Object t in targets)
             {
-                if (((Outline)t).IsCreated) { anyCreated = true; break; }
+                if (((ObjectOutline)t).IsCreated) { anyCreated = true; break; }
             }
 
             if (targets.Length == 1 && anyCreated)
             {
-                var outline = (Outline)target;
+                var outline = (ObjectOutline)target;
                 if (GUILayout.Button(outline.IsVisible ? "Hide" : "Show"))
                 {
                     Undo.RecordObject(outline.GeneratedGameObject, "Toggle Outline Visibility");
@@ -128,20 +128,20 @@ namespace reromanlee.MeshOutline.Editor
             {
                 if (GUILayout.Button(anyCreated ? "Recalculate" : "Create"))
                 {
-                    foreach (Object t in targets) CreateOrRecalculate((Outline)t);
+                    foreach (Object t in targets) CreateOrRecalculate((ObjectOutline)t);
                 }
 
                 using (new EditorGUI.DisabledScope(!anyCreated))
                 {
                     if (GUILayout.Button("Remove"))
                     {
-                        foreach (Object t in targets) RemoveOutline((Outline)t);
+                        foreach (Object t in targets) RemoveOutline((ObjectOutline)t);
                     }
                 }
             }
         }
 
-        internal static void CreateOrRecalculate(Outline outline)
+        internal static void CreateOrRecalculate(ObjectOutline outline)
         {
             Undo.RecordObject(outline, "Bake Outline");
             bool wasCreated = outline.IsCreated;
@@ -155,7 +155,7 @@ namespace reromanlee.MeshOutline.Editor
             MarkDirty(outline);
         }
 
-        internal static void RemoveOutline(Outline outline)
+        internal static void RemoveOutline(ObjectOutline outline)
         {
             Undo.RecordObject(outline, "Remove Outline");
             if (outline.GeneratedGameObject != null)
@@ -168,7 +168,7 @@ namespace reromanlee.MeshOutline.Editor
             MarkDirty(outline);
         }
 
-        internal static void MarkDirty(Outline outline)
+        internal static void MarkDirty(ObjectOutline outline)
         {
             EditorUtility.SetDirty(outline);
             if (!Application.isPlaying && outline.gameObject.scene.IsValid())

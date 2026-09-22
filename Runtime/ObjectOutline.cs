@@ -19,7 +19,7 @@ namespace reromanlee.MeshOutline
     [RequireComponent(typeof(MeshFilter))]
     [DisallowMultipleComponent]
     [ExecuteAlways] // Needed only for OnEnable (per-object state refresh) and OnDestroy (edit-mode cleanup). No per-frame callbacks are used.
-    public class Outline : MonoBehaviour
+    public class ObjectOutline : MonoBehaviour
     {
         private const string GeneratedName = "Outline (generated)";
 
@@ -101,7 +101,7 @@ namespace reromanlee.MeshOutline
                 if (syncChildOutlines)
                 {
                     // Note: allocates; only runs when visibility is toggled, never per frame.
-                    foreach (Outline child in GetComponentsInChildren<Outline>(includeInactive: true))
+                    foreach (ObjectOutline child in GetComponentsInChildren<ObjectOutline>(includeInactive: true))
                     {
                         if (child == this || child.outlineGameObject == null) continue;
                         child.outlineGameObject.SetActive(value);
@@ -270,7 +270,7 @@ namespace reromanlee.MeshOutline
             Mesh source = meshFilter != null ? meshFilter.sharedMesh : null;
             if (source == null)
             {
-                Debug.LogWarning($"[{nameof(Outline)}] '{name}' has no mesh assigned to its MeshFilter; outline not baked.", this);
+                Debug.LogWarning($"[{nameof(ObjectOutline)}] '{name}' has no mesh assigned to its MeshFilter; outline not baked.", this);
                 return;
             }
 
@@ -464,7 +464,7 @@ namespace reromanlee.MeshOutline
             if (warnedSharedMaterialsReadOnly) return;
             warnedSharedMaterialsReadOnly = true;
             Debug.LogWarning(
-                $"[{nameof(Outline)}] '{name}': OutlineColor/OutlineWidth were set while " +
+                $"[{nameof(ObjectOutline)}] '{name}': OutlineColor/OutlineWidth were set while " +
                 $"{nameof(UseMaterialInstances)} is disabled. Shared material assets are read-only, " +
                 "so the change has no visual effect. Enable UseMaterialInstances for per-object " +
                 "color/width, or edit the shared material asset directly.", this);
