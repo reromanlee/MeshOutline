@@ -275,7 +275,7 @@ namespace reromanlee.MeshOutline.Editor
             importer.SaveAndReimport();
         }
 
-        private static void EnsureFolder(string folder)
+        internal static void EnsureFolder(string folder)
         {
             if (AssetDatabase.IsValidFolder(folder)) return;
             string parent = Path.GetDirectoryName(folder)?.Replace('\\', '/');
