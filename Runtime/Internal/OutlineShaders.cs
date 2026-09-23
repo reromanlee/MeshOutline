@@ -20,6 +20,7 @@ namespace reromanlee.MeshOutline
         internal static readonly int StencilRefId = Shader.PropertyToID("_StencilRef");
         internal static readonly int ColorId = Shader.PropertyToID("_OutlineColor");
         internal static readonly int WidthId = Shader.PropertyToID("_OutlineWidth");
+        internal static readonly int WidthModeId = Shader.PropertyToID("_OutlineWidthMode");
 
         private static Shader mask;
         private static Shader fill;

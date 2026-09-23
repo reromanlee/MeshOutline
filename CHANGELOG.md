@@ -20,8 +20,8 @@ by construction, and makes prefabs, undo and runtime spawning work.
   material slots, `UseMaterialInstances`, `OutlineColor` and `OutlineWidth`. Setting them always
   takes effect immediately (1.0.0 silently ignored them unless material instances were enabled).
   `CustomFillMaterial` takes over for custom fill shaders.
-- **Width is in pixels at 1080p** and no longer depends on the field of view. At a 60° FOV, 1.0.0
-  widths look almost the same (within 7%); narrower FOVs used to make outlines much thicker.
+- **Width is in pixels at 1080p** by default and no longer depends on the field of view. At a 60°
+  FOV, 1.0.0 widths look almost the same (within 7%); narrower FOVs used to make outlines much thicker.
 - **One component covers the whole hierarchy** as one silhouette, so `SyncChildOutlines` is removed.
   Nested outlines are independent. `RequireComponent(MeshFilter)` is gone, so an outline can sit on an
   empty model root.
@@ -45,6 +45,10 @@ rebaked automatically when it loads.
 - `Refresh()` and the opt-in **Track Source Every Frame** to copy renderers' enabled state, layer and
   blend-shape weights.
 - `IncludeChildren`, `SetExcluded()` and `Parts`.
+- `WidthMode`: **Pixels at 1080p** (the default: the same thickness at any distance, the same share of
+  the screen at any resolution), **Exact Pixels** (the same pixel count at any distance and
+  resolution), or **Scales with Distance** (a world-space thickness, `Width` pixels at
+  `ReferenceDistance`, thinner farther away).
 - HDR outline colors, for glowing outlines with bloom.
 - Runtime `AddComponent`: outline meshes are baked on the spot for Read/Write meshes, with one clear
   error for meshes that aren't readable.

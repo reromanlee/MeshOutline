@@ -7,9 +7,14 @@
 // so hard edges don't tear open when extruded. Keeping them in NORMAL rather than a UV
 // channel means skinning and batching transform them like any other normal.
 //
-// Width: _OutlineWidth is in pixels at 1080p. The offset is derived from the projection
-// matrix, so the outline covers the same share of the screen at any resolution, field of
-// view or orthographic size.
+// Width, set by ObjectOutline.WidthMode (_OutlineWidthMode):
+//   0 Pixels at 1080p: _OutlineWidth is in pixels of a 1080p-high frame, so the outline covers
+//     the same share of the screen at any resolution, field of view or orthographic size.
+//   1 Exact Pixels: _OutlineWidth is in pixels of the current render target.
+//   2 Scales with Distance: _OutlineWidth is a thickness in world units (ObjectOutline converts
+//     its pixels-at-a-reference-distance into it), so it shrinks with distance like the object.
+// The screen modes derive the offset from the projection matrix and scale it by view depth,
+// which keeps it constant on screen at any distance.
 //
 // Depth: only view-space X/Y are offset; view-space Z (and therefore clip Z and, in
 // perspective, clip W) stays exactly that of the source surface. The fill depth-tests
@@ -29,7 +34,9 @@ Shader "Hidden/MeshOutline/Fill" {
 		// Assigned per outline by ObjectOutline.
 		[IntRange] _StencilRef("Stencil Reference", Range(0, 255)) = 1
 		[HDR] _OutlineColor("Outline Color", Color) = (1, 1, 1, 1)
-		_OutlineWidth("Outline Width (px at 1080p)", Float) = 4
+		_OutlineWidth("Outline Width", Float) = 4
+		// Driven by ObjectOutline.WidthMode: 0 = pixels at 1080p, 1 = exact pixels, 2 = world units.
+		_OutlineWidthMode("Outline Width Mode", Float) = 0
 	}
 
 	// ------------------------------------------------------------------ URP
@@ -78,6 +85,7 @@ Shader "Hidden/MeshOutline/Fill" {
 			CBUFFER_START(UnityPerMaterial)
 				half4 _OutlineColor;
 				float _OutlineWidth;
+				float _OutlineWidthMode;
 			CBUFFER_END
 
 			Varyings vert(Attributes input) {
@@ -88,13 +96,14 @@ Shader "Hidden/MeshOutline/Fill" {
 				float3 positionVS = TransformWorldToView(TransformObjectToWorld(input.positionOS.xyz));
 				float3 normalVS = normalize(TransformWorldToViewDir(TransformObjectToWorldNormal(input.normalOS)));
 
-				// A 1080p-high frame spans 2 / P[1][1] view units per unit of depth in
-				// perspective (P[1][1] = cot(fov / 2)), and 2 * orthoSize in orthographic
-				// (P[1][1] = 1 / orthoSize, no depth factor). abs(): flipped render targets
-				// negate P[1][1].
-				float viewUnitsPerPixel = 2.0 / (1080.0 * abs(UNITY_MATRIX_P._m11));
+				// The frame's height spans 2 / P[1][1] view units per unit of depth in perspective
+				// (P[1][1] = cot(fov / 2)), and 2 * orthoSize in orthographic (P[1][1] =
+				// 1 / orthoSize, no depth factor). abs(): flipped render targets negate P[1][1].
+				float frameHeight = _OutlineWidthMode > 0.5 ? _ScreenParams.y : 1080.0;
+				float viewUnitsPerPixel = 2.0 / (frameHeight * abs(UNITY_MATRIX_P._m11));
 				float depth = unity_OrthoParams.w > 0.5 ? 1.0 : -positionVS.z;
-				positionVS.xy += normalVS.xy * (_OutlineWidth * viewUnitsPerPixel * depth);
+				float extrusion = _OutlineWidthMode > 1.5 ? _OutlineWidth : _OutlineWidth * viewUnitsPerPixel * depth;
+				positionVS.xy += normalVS.xy * extrusion;
 
 				output.positionCS = TransformWViewToHClip(positionVS);
 				return output;
@@ -149,6 +158,7 @@ Shader "Hidden/MeshOutline/Fill" {
 			// float4 rather than fixed4 so HDR colors aren't clamped.
 			float4 _OutlineColor;
 			float _OutlineWidth;
+			float _OutlineWidthMode;
 
 			v2f vert(appdata input) {
 				v2f output;
@@ -158,10 +168,12 @@ Shader "Hidden/MeshOutline/Fill" {
 				float3 positionVS = UnityObjectToViewPos(input.vertex.xyz);
 				float3 normalVS = normalize(mul((float3x3)UNITY_MATRIX_IT_MV, input.normal));
 
-				// Pixels at 1080p to view units: see the URP pass above.
-				float viewUnitsPerPixel = 2.0 / (1080.0 * abs(UNITY_MATRIX_P._m11));
+				// Width to view units: see the URP pass above.
+				float frameHeight = _OutlineWidthMode > 0.5 ? _ScreenParams.y : 1080.0;
+				float viewUnitsPerPixel = 2.0 / (frameHeight * abs(UNITY_MATRIX_P._m11));
 				float depth = unity_OrthoParams.w > 0.5 ? 1.0 : -positionVS.z;
-				positionVS.xy += normalVS.xy * (_OutlineWidth * viewUnitsPerPixel * depth);
+				float extrusion = _OutlineWidthMode > 1.5 ? _OutlineWidth : _OutlineWidth * viewUnitsPerPixel * depth;
+				positionVS.xy += normalVS.xy * extrusion;
 
 				output.position = UnityViewToClipPos(positionVS);
 				return output;

@@ -13,7 +13,7 @@
 - **One silhouette per object.** Put the component on a character or prop root and every mesh under it is outlined as one shape, with no lines between parts.
 - **Correct overlaps, automatically.** Nearer outlines draw over farther objects and farther ones hide behind nearer ones, with no sorting layers or priorities to manage.
 - **Skinned meshes and LOD groups.** Skinned outlines deform with their bones and blend shapes; outlines switch and cull with their LOD level at runtime.
-- **The same width everywhere.** Width is in pixels at 1080p, so an outline covers the same share of the screen at any resolution, field of view or orthographic size.
+- **Width the way you want it.** By default it's in pixels at 1080p: the same thickness at any distance, and the same share of the screen at any resolution or field of view. It can also be exact pixels, or scale with distance like part of the object.
 - **Works with the editor, not against it.** Duplicate, undo, prefabs, prefab mode, play mode and domain reloads all just work. Change or reimport a mesh and its outline rebakes on its own.
 - **URP and Built-in**, forward and deferred, in the same shaders. SRP Batcher compatible, GPU instancing and single-pass instanced VR ready.
 
@@ -60,11 +60,13 @@ Want a complete example? Import the **Hover & Select** sample from the package's
 | Setting | What it does |
 | --- | --- |
 | **Color** | Outline color. HDR colors glow when bloom is enabled. |
-| **Width** | Width in pixels at 1080p. |
+| **Width Mode** | How Width is measured. **Pixels at 1080p** (default): the same thickness at any distance, and the same share of the screen at any resolution (8 at 1080p is 16 pixels at 4K). **Exact Pixels**: the same number of pixels at any distance and resolution. **Scales with Distance**: like part of the object, thinner farther away and thicker up close. |
+| **Width** | Outline width in pixels: at 1080p, or exact pixels with Exact Pixels. With Scales with Distance, it's the width when the object is at the Reference Distance. |
+| **Reference Distance** | *Scales with Distance only.* The distance (in meters) at which the outline is Width pixels thick, at 1080p with a 60° field of view. |
 | **Occlusion** | **Normal**: hidden behind other geometry, like any object. **X-Ray**: always visible, even through walls. |
 | **Include Children** | Also outline child renderers, merged into one silhouette. A child with its own Object Outline is outlined separately. |
 | **Parts** | Every renderer the outline covers, with its bake status. Untick one to leave it out (a muzzle flash, a shadow blob...). Click a name to highlight it. |
-| **Advanced > Custom Fill Material** | A material for the fill pass, e.g. an animated outline. Its shader must follow the built-in fill shader's `_StencilRef` and `_ZTest` conventions. |
+| **Advanced > Custom Fill Material** | A material for the fill pass, e.g. an animated outline. Base its shader on the built-in fill shader: it must use `_StencilRef` and `_ZTest`, and it's given `_OutlineColor`, `_OutlineWidth` and `_OutlineWidthMode`. |
 | **Advanced > Track Source Every Frame** | Copy each renderer's enabled state, layer and blend-shape weights to the outline every frame. See [Keeping in sync](#keeping-in-sync). |
 | **Rebake** | Rebake this outline's meshes, even if they look up to date. You shouldn't normally need it. |
 
@@ -74,8 +76,11 @@ Want a complete example? Import the **Hover & Select** sample from the package's
 var outline = gameObject.AddComponent<ObjectOutline>();
 
 outline.Color = Color.cyan;          // applies immediately
-outline.Width = 6f;                  // pixels at 1080p
+outline.Width = 6f;                  // pixels at 1080p by default
 outline.Occlusion = OutlineOcclusion.XRay;
+
+outline.WidthMode = OutlineWidthMode.ScalesWithDistance;
+outline.ReferenceDistance = 10f;     // 6 px at 10 m, 3 px at 20 m, 12 px at 5 m
 outline.enabled = false;             // hide; no allocation
 
 outline.IncludeChildren = false;     // only this object's own renderer
@@ -139,6 +144,7 @@ If something changes those four every frame (facial animation, or toggling `rend
 
 - **"Can't be outlined at runtime: mesh ... isn't readable"**: the outline was added at runtime to a mesh without Read/Write. Enable Read/Write in the mesh's import settings, or add the outline in the editor.
 - **An outline doesn't follow `renderer.enabled` or blend shapes**: see [Keeping in sync](#keeping-in-sync).
+- **Changing the Game view's resolution doesn't change the outline**: that's Pixels at 1080p working. The Game view scales the image to fit the window, and the outline keeps the same share of the screen at every resolution, so it looks the same. Use Exact Pixels for a fixed pixel count. Neither screen mode changes with distance; Scales with Distance does.
 - **A part shows "baked · LOD 1+" but isn't visible in edit mode**: edit mode only outlines LOD0; the other levels show at runtime.
 - **An outline looks wrong after changing a mesh outside Unity's import pipeline**: press **Rebake** on the outline, or **Rebake All** in Project Settings.
 
@@ -147,7 +153,7 @@ If something changes those four every frame (facial animation, or toggling `rend
 2.0.0 is a breaking release; [CHANGELOG.md](CHANGELOG.md) lists every change. In short:
 
 - The component is now `ObjectOutline` (existing components keep working; update your scripts). Show and hide it with `enabled`.
-- Color and width are plain properties (`Color`, `Width`), and width is in pixels at 1080p.
+- Color and width are plain properties (`Color`, `Width`). Width is in pixels at 1080p by default; `WidthMode` also offers exact pixels and a width that scales with distance.
 - One component covers the whole hierarchy, so `SyncChildOutlines` is gone.
 - Opening a scene saved with 1.0.0 removes its hidden "Outline (generated)" children and rebakes; save the scene afterwards.
 

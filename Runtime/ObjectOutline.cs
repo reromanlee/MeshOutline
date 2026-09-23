@@ -46,8 +46,18 @@ namespace reromanlee.MeshOutline
         private Color color = Color.white;
 
         [SerializeField, Min(0f), FormerlySerializedAs("outlineWidth")]
-        [Tooltip("Width in pixels at 1080p. The outline covers the same share of the screen at any resolution and field of view.")]
+        [Tooltip("Outline width, in pixels at 1080p (Exact Pixels: in screen pixels).")]
         private float width = 4f;
+
+        [SerializeField]
+        [Tooltip("Pixels at 1080p: the same share of the screen at any resolution, the same thickness at any distance.\n" +
+                 "Exact Pixels: the same number of screen pixels at any resolution and distance.\n" +
+                 "Scales with Distance: like part of the object; Width pixels (at 1080p, 60° field of view) at Reference Distance, thinner farther away, thicker up close.")]
+        private OutlineWidthMode widthMode = OutlineWidthMode.PixelsAt1080p;
+
+        [SerializeField, Min(0.01f)]
+        [Tooltip("Scales with Distance: the distance, in meters, at which the outline is Width pixels thick (at 1080p with a 60° field of view).")]
+        private float referenceDistance = 10f;
 
         [SerializeField]
         [Tooltip("Normal: hidden behind other geometry, like any object. X-Ray: always visible, even through walls.")]
@@ -106,8 +116,7 @@ namespace reromanlee.MeshOutline
         }
 
         /// <summary>
-        /// Width in pixels at 1080p: the outline covers the same share of the screen at any
-        /// resolution and field of view.
+        /// Outline width in pixels: at 1080p by default, see <see cref="WidthMode"/>.
         /// </summary>
         public float Width
         {
@@ -115,6 +124,34 @@ namespace reromanlee.MeshOutline
             set
             {
                 width = Mathf.Max(0f, value);
+                ApplyMaterialProperties();
+            }
+        }
+
+        /// <summary>
+        /// How <see cref="Width"/> is measured: pixels at 1080p (the same share of the screen at
+        /// any resolution), exact pixels, or a world-space thickness that scales with distance.
+        /// </summary>
+        public OutlineWidthMode WidthMode
+        {
+            get => widthMode;
+            set
+            {
+                widthMode = value;
+                ApplyMaterialProperties();
+            }
+        }
+
+        /// <summary>
+        /// For <see cref="OutlineWidthMode.ScalesWithDistance"/>: the distance, in meters, at which
+        /// the outline is <see cref="Width"/> pixels thick (at 1080p with a 60° field of view).
+        /// </summary>
+        public float ReferenceDistance
+        {
+            get => referenceDistance;
+            set
+            {
+                referenceDistance = Mathf.Max(0.01f, value);
                 ApplyMaterialProperties();
             }
         }
@@ -307,9 +344,22 @@ namespace reromanlee.MeshOutline
                 fillMaterial.SetFloat(OutlineShaders.ZTestId, zTest);
                 fillMaterial.SetFloat(OutlineShaders.StencilRefId, stencilRef);
                 fillMaterial.SetColor(OutlineShaders.ColorId, color);
-                fillMaterial.SetFloat(OutlineShaders.WidthId, width);
+                fillMaterial.SetFloat(OutlineShaders.WidthId, ShaderWidth);
+                fillMaterial.SetFloat(OutlineShaders.WidthModeId, (float)widthMode);
             }
         }
+
+        // World units a pixel of a 1080p-high frame spans per meter of distance, with a 60°
+        // vertical field of view: 2 * tan(30°) / 1080.
+        private static readonly float worldUnitsPerPixelAt1080pPerMeter = 2f * Mathf.Tan(30f * Mathf.Deg2Rad) / 1080f;
+
+        /// <summary>
+        /// The fill shader's _OutlineWidth: pixels in the screen modes; for Scales with Distance,
+        /// the world-space thickness that is <see cref="width"/> pixels at <see cref="referenceDistance"/>.
+        /// </summary>
+        internal float ShaderWidth => widthMode == OutlineWidthMode.ScalesWithDistance
+            ? width * referenceDistance * worldUnitsPerPixelAt1080pPerMeter
+            : width;
 
         /// <summary>Creates, updates and removes parts so there is one per outlined renderer.</summary>
         private void SyncParts()
@@ -584,6 +634,7 @@ namespace reromanlee.MeshOutline
         private void OnValidate()
         {
             width = Mathf.Max(0f, width);
+            referenceDistance = Mathf.Max(0.01f, referenceDistance);
             ApplyMaterialProperties();
             UpdateTracking();
             // Not awake yet, or a prefab asset.

@@ -180,6 +180,30 @@ namespace reromanlee.MeshOutline.Tests
         }
 
         [Test]
+        public void WidthModes_AreAppliedToTheFillMaterial()
+        {
+            var outline = CreateOutlined("A").GetComponent<ObjectOutline>();
+            outline.Width = 8f;
+            Assert.AreEqual(OutlineWidthMode.PixelsAt1080p, outline.WidthMode, "the default");
+            Assert.AreEqual(8f, outline.FillMaterial.GetFloat(OutlineShaders.WidthId));
+            Assert.AreEqual(0f, outline.FillMaterial.GetFloat(OutlineShaders.WidthModeId));
+
+            outline.WidthMode = OutlineWidthMode.Pixels;
+            Assert.AreEqual(8f, outline.FillMaterial.GetFloat(OutlineShaders.WidthId));
+            Assert.AreEqual(1f, outline.FillMaterial.GetFloat(OutlineShaders.WidthModeId));
+
+            // A world-space thickness: 8 pixels of a 1080p frame at 10 m with a 60° field of view.
+            outline.WidthMode = OutlineWidthMode.ScalesWithDistance;
+            outline.ReferenceDistance = 10f;
+            float expected = 8f * 10f * 2f * Mathf.Tan(30f * Mathf.Deg2Rad) / 1080f;
+            Assert.AreEqual(expected, outline.FillMaterial.GetFloat(OutlineShaders.WidthId), 1e-6f);
+            Assert.AreEqual(2f, outline.FillMaterial.GetFloat(OutlineShaders.WidthModeId));
+
+            outline.ReferenceDistance = -1f;
+            Assert.AreEqual(0.01f, outline.ReferenceDistance);
+        }
+
+        [Test]
         public void CustomFillMaterial_IsCopiedAndNeverModified()
         {
             var outline = CreateOutlined("A").GetComponent<ObjectOutline>();

@@ -24,8 +24,12 @@ namespace reromanlee.MeshOutline.Editor
         private static class Styles
         {
             public static readonly GUIContent Width = new GUIContent("Width",
-                "Width in pixels at 1080p. The outline covers the same share of the screen at any resolution and field of view.");
-            public static readonly GUIContent Unit = new GUIContent("px @1080p");
+                "Outline width, in pixels at 1080p (Exact Pixels: in screen pixels). See Width Mode.");
+            public static readonly GUIContent PixelsAt1080p = new GUIContent("px @1080p");
+            public static readonly GUIContent Pixels = new GUIContent("px");
+            public static readonly GUIContent ReferenceDistance = new GUIContent("Reference Distance",
+                "The distance at which the outline is Width pixels thick (at 1080p with a 60° field of view). Farther away it gets thinner, closer it gets thicker, like the object itself.");
+            public static readonly GUIContent Meters = new GUIContent("m");
             public static readonly GUIContent Rebake = new GUIContent("Rebake",
                 "Rebake this outline's meshes from their sources, even if they look up to date.");
             public static readonly GUIContent Advanced = new GUIContent("Advanced");
@@ -47,6 +51,8 @@ namespace reromanlee.MeshOutline.Editor
 
         private SerializedProperty color;
         private SerializedProperty width;
+        private SerializedProperty widthMode;
+        private SerializedProperty referenceDistance;
         private SerializedProperty occlusion;
         private SerializedProperty includeChildren;
         private SerializedProperty customFillMaterial;
@@ -57,6 +63,8 @@ namespace reromanlee.MeshOutline.Editor
         {
             color = serializedObject.FindProperty("color");
             width = serializedObject.FindProperty("width");
+            widthMode = serializedObject.FindProperty("widthMode");
+            referenceDistance = serializedObject.FindProperty("referenceDistance");
             occlusion = serializedObject.FindProperty("occlusion");
             includeChildren = serializedObject.FindProperty("includeChildren");
             customFillMaterial = serializedObject.FindProperty("customFillMaterial");
@@ -67,10 +75,22 @@ namespace reromanlee.MeshOutline.Editor
         {
             serializedObject.Update();
             EditorGUILayout.PropertyField(color);
+            EditorGUILayout.PropertyField(widthMode);
+            bool mixedModes = widthMode.hasMultipleDifferentValues;
+            var mode = (OutlineWidthMode)widthMode.enumValueIndex;
             using (new EditorGUILayout.HorizontalScope())
             {
                 EditorGUILayout.Slider(width, 0f, 20f, Styles.Width);
-                GUILayout.Label(Styles.Unit, EditorStyles.miniLabel, GUILayout.ExpandWidth(false));
+                GUIContent unit = mixedModes || mode == OutlineWidthMode.Pixels ? Styles.Pixels : Styles.PixelsAt1080p;
+                GUILayout.Label(unit, EditorStyles.miniLabel, GUILayout.Width(62f));
+            }
+            if (mixedModes || mode == OutlineWidthMode.ScalesWithDistance)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.PropertyField(referenceDistance, Styles.ReferenceDistance);
+                    GUILayout.Label(Styles.Meters, EditorStyles.miniLabel, GUILayout.Width(62f));
+                }
             }
             EditorGUILayout.PropertyField(occlusion);
             EditorGUILayout.PropertyField(includeChildren);
