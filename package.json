@@ -19,5 +19,12 @@
     "email": "contact@reromanlee.com"
   },
   "documentationUrl": "https://github.com/reromanlee/MeshOutline#readme",
-  "changelogUrl": "https://github.com/reromanlee/MeshOutline/blob/main/CHANGELOG.md"
+  "changelogUrl": "https://github.com/reromanlee/MeshOutline/blob/main/CHANGELOG.md",
+  "samples": [
+    {
+      "displayName": "Hover & Select",
+      "description": "Outline what's under the pointer and keep clicked objects selected. Also shows a multi-part prop, a LOD group, a bending skinned mesh and an X-ray outline. Works in URP and Built-in, with either input system.",
+      "path": "Samples~/HoverAndSelect"
+    }
+  ]
 }
