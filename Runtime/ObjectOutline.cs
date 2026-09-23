@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
-
+using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -8,611 +10,497 @@ using UnityEditor;
 namespace reromanlee.MeshOutline
 {
     /// <summary>
-    /// Bakes a prebaked outline for the <see cref="MeshFilter"/> on this GameObject.
-    ///
-    /// A hidden child GameObject ("Outline (generated)") is created in the editor with a copy of
-    /// the source mesh. Smooth (position-averaged) normals are baked into its NORMAL channel, which the
-    /// outline fill shader uses to extrude a crack-free silhouette. Because everything is baked at
-    /// edit time and serialized into the scene, the component has zero per-frame runtime cost:
-    /// no Update loop, no post-processing, no render textures, no command buffers.
+    /// Draws a constant-width outline around this GameObject's meshes and, with
+    /// <see cref="IncludeChildren"/>, its children's meshes, merged into one silhouette. Show or
+    /// hide it with <c>enabled</c>.
     /// </summary>
-    [RequireComponent(typeof(MeshFilter))]
+    /// <remarks>
+    /// Nothing runs per frame. The outline is drawn by hidden, never-saved renderers built once in
+    /// <c>Awake</c>, from outline meshes the editor bakes ahead of time into a shared cache
+    /// (Project Settings &gt; Mesh Outline). Outlines added at runtime bake on the spot instead,
+    /// which requires Read/Write-enabled meshes.
+    /// </remarks>
+    [ExecuteAlways]
     [DisallowMultipleComponent]
-    [ExecuteAlways] // Needed only for OnEnable (per-object state refresh) and OnDestroy (edit-mode cleanup). No per-frame callbacks are used.
-    public class ObjectOutline : MonoBehaviour
+    [AddComponentMenu("Rendering/Object Outline")]
+    [HelpURL("https://github.com/reromanlee/MeshOutline#readme")]
+    public sealed class ObjectOutline : MonoBehaviour
     {
-        private const string GeneratedName = "Outline (generated)";
-
-        private static readonly int OutlineColorId = Shader.PropertyToID("_OutlineColor");
-        private static readonly int OutlineWidthId = Shader.PropertyToID("_OutlineWidth");
-        private static readonly int StencilRefId = Shader.PropertyToID("_StencilRef");
-
-        [Header("Materials")]
-        [SerializeField, Tooltip("Material for the mask pass (writes stencil, no color).")]
-        private Material outlineMaskMaterial;
-
-        [SerializeField, Tooltip("Material for the fill pass (extrudes along baked smooth normals and draws the outline color).")]
-        private Material outlineFillMaterial;
-
-        [SerializeField, Tooltip("Allow this outline to have its own color and width. When disabled, the shared material assets define the look and Outline Color/Width below are read-only. (Internally every outline uses a lightweight material instance either way, so a unique stencil reference can be assigned automatically — the shared assets are never modified.)")]
-        private bool useMaterialInstances;
-
-        [Header("Appearance")]
-        [SerializeField, Tooltip("Synced to the fill material instance's _OutlineColor. Editable only when Use Material Instances is enabled; otherwise it mirrors the shared material.")]
-        private Color outlineColor = Color.white;
-
-        [SerializeField, Min(0f), Tooltip("Synced to the outline material instances' _OutlineWidth. Editable only when Use Material Instances is enabled; otherwise it mirrors the shared material.")]
-        private float outlineWidth = 2f;
-
-        [Header("Behaviour")]
-        [SerializeField, Tooltip("When toggling IsVisible on this outline, also toggle the outlines of all child objects.")]
-        private bool syncChildOutlines;
-
-        [SerializeField, Tooltip("Hide the generated outline object in the Hierarchy window. It is still rendered, saved with the scene and pickable in the Scene view.")]
-        private bool hideGeneratedObjectInHierarchy = true;
-
-        // Baked state. Serialized (but hidden) so the outline survives scene reloads and builds
-        // without any runtime work.
-        [SerializeField, HideInInspector] private MeshFilter meshFilter;
-        [SerializeField, HideInInspector] private GameObject outlineGameObject;
-        [SerializeField, HideInInspector] private MeshFilter outlineMeshFilter;
-        [SerializeField, HideInInspector] private MeshRenderer outlineMeshRenderer;
-        [SerializeField, HideInInspector] private Mesh generatedMesh;
-        [SerializeField, HideInInspector] private Mesh bakedSourceMesh;
-        [SerializeField, HideInInspector] private Material maskMaterialInstance;
-        [SerializeField, HideInInspector] private Material fillMaterialInstance;
-
-        /// <summary>Whether an outline has been created for this object.</summary>
-        public bool IsCreated => outlineGameObject != null;
-
-        /// <summary>The generated child GameObject that renders the outline, or null if not created.</summary>
-        public GameObject GeneratedGameObject => outlineGameObject;
-
-        /// <summary>
-        /// True when the outline was baked from a different mesh than the one currently assigned
-        /// to the MeshFilter, i.e. the bake is out of date and <see cref="Recalculate()"/> should run.
-        /// </summary>
-        public bool IsBakeStale
+        /// <summary>The outline mesh baked for one source renderer.</summary>
+        [Serializable]
+        internal struct BakedPart
         {
-            get
-            {
-                if (!IsCreated) return false;
-                if (meshFilter == null) meshFilter = GetComponent<MeshFilter>();
-                return meshFilter != null && meshFilter.sharedMesh != bakedSourceMesh;
-            }
+            public Renderer renderer;
+            public Mesh sourceMesh;
+            public Mesh mesh;
+
+            /// <summary>
+            /// Fingerprint of <see cref="sourceMesh"/> at bake time. Only used when the bake is
+            /// stored in the scene because the source mesh isn't an asset (e.g. ProBuilder's).
+            /// </summary>
+            public string sourceHash;
         }
 
-        /// <summary>
-        /// Shows or hides the outline. When <see cref="SyncChildOutlines"/> is enabled, setting this
-        /// also shows/hides the outlines of all child objects.
-        /// </summary>
-        public bool IsVisible
+        [SerializeField, ColorUsage(true, true), FormerlySerializedAs("outlineColor")]
+        [Tooltip("Outline color. HDR colors glow when bloom is enabled.")]
+        private Color color = Color.white;
+
+        [SerializeField, Min(0f), FormerlySerializedAs("outlineWidth")]
+        [Tooltip("Width in pixels at 1080p. The outline covers the same share of the screen at any resolution and field of view.")]
+        private float width = 4f;
+
+        [SerializeField]
+        [Tooltip("Normal: hidden behind other geometry, like any object. X-Ray: always visible, even through walls.")]
+        private OutlineOcclusion occlusion = OutlineOcclusion.Normal;
+
+        [SerializeField]
+        [Tooltip("Also outline child renderers, merged into one silhouette. A child with its own Object Outline is outlined separately.")]
+        private bool includeChildren = true;
+
+        [SerializeField]
+        [Tooltip("Renderers under this outline that shouldn't be outlined.")]
+        private List<Renderer> excludedRenderers = new List<Renderer>();
+
+        [SerializeField]
+        [Tooltip("Optional material for the fill pass, e.g. an animated outline. Its shader must follow the built-in fill shader's _StencilRef and _ZTest conventions.")]
+        private Material customFillMaterial;
+
+        // Written by the editor. Serialized so builds and prefab instances render without any
+        // runtime baking.
+        [SerializeField, HideInInspector] private List<BakedPart> bakedParts = new List<BakedPart>();
+
+        // 1.0.0 saved a hidden child object here. It's deleted on load: parts are never saved now.
+        [SerializeField, HideInInspector, FormerlySerializedAs("outlineGameObject")]
+        private GameObject legacyGeneratedObject;
+
+        // Runtime state, derived from the fields above and never saved.
+        private readonly List<OutlinePart> parts = new List<OutlinePart>();
+        private readonly List<Renderer> partSources = new List<Renderer>();
+        private Material maskMaterial;
+        private Material fillMaterial;
+        private Material[] materials;
+        private Material materialsBuiltFrom;
+        private int stencilRef;
+        private bool built;
+
+        private static readonly List<ObjectOutline> live = new List<ObjectOutline>();
+        private static readonly List<Renderer> rendererBuffer = new List<Renderer>();
+        private static readonly List<Renderer> candidateBuffer = new List<Renderer>();
+
+        /// <summary>Outline color. HDR colors glow when bloom is enabled.</summary>
+        public Color Color
         {
-            get => outlineGameObject != null && outlineGameObject.activeSelf;
+            get => color;
             set
             {
-                if (outlineGameObject != null)
-                {
-                    outlineGameObject.SetActive(value);
-                }
-                if (syncChildOutlines)
-                {
-                    // Note: allocates; only runs when visibility is toggled, never per frame.
-                    foreach (ObjectOutline child in GetComponentsInChildren<ObjectOutline>(includeInactive: true))
-                    {
-                        if (child == this || child.outlineGameObject == null) continue;
-                        child.outlineGameObject.SetActive(value);
-                    }
-                }
+                color = value;
+                ApplyMaterialProperties();
             }
         }
 
         /// <summary>
-        /// Outline color. With <see cref="UseMaterialInstances"/> enabled this is per-object and
-        /// written to the fill material instance. With it disabled, the shared material asset is
-        /// the source of truth: the getter reads from it and the setter has no visual effect
-        /// (shared assets are never modified by this component).
+        /// Width in pixels at 1080p: the outline covers the same share of the screen at any
+        /// resolution and field of view.
         /// </summary>
-        public Color OutlineColor
+        public float Width
         {
-            get
-            {
-                if (!useMaterialInstances && outlineFillMaterial != null && outlineFillMaterial.HasProperty(OutlineColorId))
-                {
-                    return outlineFillMaterial.GetColor(OutlineColorId);
-                }
-                return outlineColor;
-            }
+            get => width;
             set
             {
-                outlineColor = value;
-                if (!useMaterialInstances) { WarnSharedMaterialsAreReadOnly(); return; }
-                ApplyOutlineProperties();
+                width = Mathf.Max(0f, value);
+                ApplyMaterialProperties();
             }
         }
 
-        /// <summary>
-        /// Outline width. With <see cref="UseMaterialInstances"/> enabled this is per-object and
-        /// written to the outline material instances. With it disabled, the shared material asset
-        /// is the source of truth: the getter reads from it and the setter has no visual effect
-        /// (shared assets are never modified by this component).
-        /// </summary>
-        public float OutlineWidth
+        /// <summary>Whether the outline hides behind other geometry or is always visible.</summary>
+        public OutlineOcclusion Occlusion
         {
-            get
-            {
-                if (!useMaterialInstances && outlineFillMaterial != null && outlineFillMaterial.HasProperty(OutlineWidthId))
-                {
-                    return outlineFillMaterial.GetFloat(OutlineWidthId);
-                }
-                return outlineWidth;
-            }
+            get => occlusion;
             set
             {
-                outlineWidth = Mathf.Max(0f, value);
-                if (!useMaterialInstances) { WarnSharedMaterialsAreReadOnly(); return; }
-                ApplyOutlineProperties();
+                occlusion = value;
+                ApplyMaterialProperties();
             }
         }
 
-        /// <summary>
-        /// When true, this outline can have its own <see cref="OutlineColor"/> and
-        /// <see cref="OutlineWidth"/>. When false, the shared material assets define the look:
-        /// the properties mirror them but never modify them. Internally every outline renders
-        /// through lightweight material instances either way, so a unique stencil reference can
-        /// be assigned automatically (SRP Batcher compatible — no per-frame cost).
-        /// </summary>
-        public bool UseMaterialInstances
+        /// <summary>Whether child renderers are outlined too, merged into one silhouette.</summary>
+        public bool IncludeChildren
         {
-            get => useMaterialInstances;
+            get => includeChildren;
             set
             {
-                if (useMaterialInstances == value) return;
-                // When enabling, seed the per-object values from the shared materials so the
-                // freshly created instances start out looking identical.
-                if (value) SyncPropertiesFromMaterials();
-                useMaterialInstances = value;
-                ApplyMaterials();
+                if (includeChildren == value) return;
+                includeChildren = value;
+                Refresh();
             }
         }
 
-        /// <summary>When true, <see cref="IsVisible"/> also toggles the outlines of all children.</summary>
-        public bool SyncChildOutlines
-        {
-            get => syncChildOutlines;
-            set => syncChildOutlines = value;
-        }
-
-        /// <summary>Hide the generated outline object in the Hierarchy window (still saved and pickable in Scene view).</summary>
-        public bool HideGeneratedObjectInHierarchy
-        {
-            get => hideGeneratedObjectInHierarchy;
-            set { hideGeneratedObjectInHierarchy = value; ApplyHideFlags(); }
-        }
-
-        /// <summary>Creates the outline using the materials assigned in the inspector.</summary>
-        public void Create() => Create(outlineMaskMaterial, outlineFillMaterial);
+        /// <summary>The renderers currently outlined.</summary>
+        public IReadOnlyList<Renderer> Parts => partSources;
 
         /// <summary>
-        /// Creates the outline child object and bakes the outline mesh. If an outline already
-        /// exists, it is recalculated in place instead (no duplicate objects, no leaked meshes).
+        /// Optional material for the fill pass, e.g. an animated outline. Its shader must follow
+        /// the built-in fill shader's <c>_StencilRef</c> and <c>_ZTest</c> conventions. The
+        /// outline uses a copy; the material itself is never modified.
         /// </summary>
-        public void Create(Material outlineMask, Material outlineFill)
+        public Material CustomFillMaterial
         {
-            outlineMaskMaterial = outlineMask;
-            outlineFillMaterial = outlineFill;
-
-            if (!IsCreated)
+            get => customFillMaterial;
+            set
             {
-                outlineGameObject = new GameObject(GeneratedName);
-                outlineGameObject.transform.SetParent(transform, worldPositionStays: false);
-                outlineMeshFilter = outlineGameObject.AddComponent<MeshFilter>();
-                outlineMeshRenderer = outlineGameObject.AddComponent<MeshRenderer>();
-
-                // The outline is a purely visual overlay: exclude it from anything that costs performance.
-                outlineMeshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                outlineMeshRenderer.receiveShadows = false;
-                outlineMeshRenderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
-                outlineMeshRenderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
-                outlineMeshRenderer.motionVectorGenerationMode = MotionVectorGenerationMode.Camera;
+                if (customFillMaterial == value) return;
+                customFillMaterial = value;
+                if (built) RebuildMaterials();
             }
-
-            Bake();
-            ApplyMaterials();
-            ApplyHideFlags();
         }
 
-        /// <summary>Rebakes the outline mesh using the materials assigned in the inspector.</summary>
-        public void Recalculate() => Recalculate(outlineMaskMaterial, outlineFillMaterial);
-
-        /// <summary>
-        /// Rebakes the outline mesh from the current source mesh, reusing the existing generated
-        /// mesh and child object. Creates the outline first if it does not exist yet.
-        /// </summary>
-        public void Recalculate(Material outlineMask, Material outlineFill)
+        /// <summary>Excludes a renderer under this outline from it, or includes it again.</summary>
+        public void SetExcluded(Renderer renderer, bool excluded)
         {
-            // Create() already handles both paths without duplicating the bake logic.
-            Create(outlineMask, outlineFill);
-        }
-
-        /// <summary>Destroys the generated outline object, mesh and material instances.</summary>
-        public void Remove()
-        {
-            DestroyMaterialInstances();
-            if (generatedMesh != null)
-            {
-                SafeDestroy(generatedMesh);
-                generatedMesh = null;
-            }
-            if (outlineGameObject != null)
-            {
-                SafeDestroy(outlineGameObject);
-            }
-            outlineGameObject = null;
-            outlineMeshFilter = null;
-            outlineMeshRenderer = null;
-            bakedSourceMesh = null;
+            if (renderer == null) throw new ArgumentNullException(nameof(renderer));
+            if (excludedRenderers.Contains(renderer) == excluded) return;
+            if (excluded) excludedRenderers.Add(renderer);
+            else excludedRenderers.RemoveAll(r => r == renderer);
+            Refresh();
         }
 
         /// <summary>
-        /// Copies the source mesh into the (reused) generated mesh and bakes smooth normals into
-        /// its NORMAL channel. Reusing <see cref="generatedMesh"/> avoids leaking a Mesh on every rebake.
+        /// Re-gathers the outlined renderers after the hierarchy changed at runtime (meshes added,
+        /// removed, re-parented or swapped), and copies each source renderer's enabled state and
+        /// layer again. Cheap when nothing changed. The editor calls this automatically.
         /// </summary>
-        private void Bake()
+        public void Refresh()
         {
-            if (meshFilter == null)
-            {
-                meshFilter = GetComponent<MeshFilter>();
-            }
-            Mesh source = meshFilter != null ? meshFilter.sharedMesh : null;
-            if (source == null)
-            {
-                Debug.LogWarning($"[{nameof(ObjectOutline)}] '{name}' has no mesh assigned to its MeshFilter; outline not baked.", this);
-                return;
-            }
-
-            if (generatedMesh == null)
-            {
-                generatedMesh = new Mesh { name = GeneratedName };
-            }
-            else
-            {
-                generatedMesh.Clear();
-            }
-
-            // Support meshes with more than 65535 vertices.
-            generatedMesh.indexFormat = source.indexFormat;
-
-            Vector3[] vertices = source.vertices;
-            generatedMesh.vertices = vertices;
-            // Note: source.triangles concatenates all submeshes into one. The renderer is given
-            // [mask, fill] materials for this single submesh, so Unity draws it twice — first the
-            // stencil mask pass, then the extruded fill pass.
-            generatedMesh.triangles = source.triangles;
-
-            // Smooth the authored normals (recalculate only if the source has none).
-            Vector3[] normals = source.normals;
-            if (normals.Length != vertices.Length)
-            {
-                generatedMesh.RecalculateNormals();
-                normals = generatedMesh.normals;
-            }
-
-            // The outline mesh is never lit, so its NORMAL channel carries the smoothed normals
-            // the fill shader extrudes along (skinning and batching transform NORMAL, not UVs).
-            generatedMesh.SetNormals(CalculateSmoothNormals(vertices, normals));
-            generatedMesh.RecalculateBounds();
-
-            outlineMeshFilter.sharedMesh = generatedMesh;
-            bakedSourceMesh = source;
+            // Not awake yet (e.g. added to an inactive object): Awake will build everything.
+            if (!built) return;
+            SyncParts();
+            SyncState();
         }
 
-        /// <summary>
-        /// Averages normals of vertices that share the same position, so hard edges (split
-        /// vertices) don't produce cracks when the fill shader extrudes the silhouette.
-        /// </summary>
-        private static List<Vector3> CalculateSmoothNormals(Vector3[] vertices, Vector3[] normals)
+        private void Awake()
         {
-            var smoothNormals = new List<Vector3>(normals);
-
-            // Group vertex indices by position. A Dictionary avoids the boxing/allocation overhead
-            // of the previous LINQ GroupBy implementation.
-            var groups = new Dictionary<Vector3, List<int>>(vertices.Length);
-            for (int i = 0; i < vertices.Length; i++)
-            {
-                if (!groups.TryGetValue(vertices[i], out List<int> indices))
-                {
-                    indices = new List<int>(4);
-                    groups.Add(vertices[i], indices);
-                }
-                indices.Add(i);
-            }
-
-            foreach (KeyValuePair<Vector3, List<int>> group in groups)
-            {
-                List<int> indices = group.Value;
-                if (indices.Count == 1) continue;
-
-                Vector3 smoothNormal = Vector3.zero;
-                for (int i = 0; i < indices.Count; i++)
-                {
-                    smoothNormal += normals[indices[i]];
-                }
-                smoothNormal.Normalize();
-
-                for (int i = 0; i < indices.Count; i++)
-                {
-                    smoothNormals[indices[i]] = smoothNormal;
-                }
-            }
-
-            return smoothNormals;
+            if (!live.Contains(this)) live.Add(this);
+            RemoveLegacyObject();
+            Build();
         }
 
-        /// <summary>
-        /// Automatically assigned stencil reference (1..255, round-robin) that makes this
-        /// outline's stencil writes distinguishable from every other outline's, which is what
-        /// lets overlapping outlines resolve correctly with zero manual setup. Not serialized:
-        /// refs are (re)assigned per session in <see cref="EnsureStencilRef"/>.
-        /// </summary>
-        [System.NonSerialized] private int assignedStencilRef;
-        private static int nextStencilRef;
-
-        private void EnsureStencilRef()
-        {
-            if (assignedStencilRef != 0) return;
-            // 255 usable values (0 is the cleared stencil state). With more than 255 outlines
-            // alive at once, refs repeat; two same-ref outlines only show a minor artifact if
-            // they also overlap on screen.
-            assignedStencilRef = 1 + (nextStencilRef++ % 255);
-        }
-
-        /// <summary>
-        /// Assigns [mask, fill] to the renderer. Every outline always renders through internal
-        /// material instances: they carry the automatically assigned per-object stencil
-        /// reference, and (when <see cref="useMaterialInstances"/> is enabled) the per-object
-        /// color/width. The shared material assets are never modified.
-        /// </summary>
-        private void ApplyMaterials()
-        {
-            if (outlineMeshRenderer == null) return;
-
-            EnsureStencilRef();
-
-            Material mask = EnsureInstance(ref maskMaterialInstance, outlineMaskMaterial);
-            Material fill = EnsureInstance(ref fillMaterialInstance, outlineFillMaterial);
-
-            // sharedMaterials: never trigger Unity's implicit .materials instancing.
-            outlineMeshRenderer.sharedMaterials = new[]
-            {
-                mask != null ? mask : outlineMaskMaterial,
-                fill != null ? fill : outlineFillMaterial
-            };
-            ApplyOutlineProperties();
-        }
-
-        /// <summary>
-        /// Creates (or refreshes) the internal instance of <paramref name="shared"/> and stamps
-        /// the per-object stencil reference on it. Existing instances are re-synced from the
-        /// shared asset so edits to the shared material (color, width, ZTest, ...) propagate.
-        /// </summary>
-        private Material EnsureInstance(ref Material instance, Material shared)
-        {
-            if (shared == null) return null;
-
-            if (instance == null)
-            {
-                instance = new Material(shared) { name = shared.name + " (instance)" };
-            }
-            else
-            {
-                // Follow the shared asset: shader swaps and property edits both propagate.
-                if (instance.shader != shared.shader) instance.shader = shared.shader;
-                instance.CopyPropertiesFromMaterial(shared);
-            }
-
-            if (instance.HasProperty(StencilRefId))
-            {
-                instance.SetFloat(StencilRefId, assignedStencilRef);
-            }
-            return instance;
-        }
-
-        /// <summary>
-        /// Writes <see cref="outlineColor"/> and <see cref="outlineWidth"/> to the internal
-        /// material instances. With <see cref="useMaterialInstances"/> disabled this is a no-op:
-        /// the instances already mirror the shared assets (copied in <see cref="EnsureInstance"/>),
-        /// and the shared assets themselves are never modified.
-        /// </summary>
-        private void ApplyOutlineProperties()
-        {
-            if (!useMaterialInstances) return;
-
-            if (fillMaterialInstance != null)
-            {
-                if (fillMaterialInstance.HasProperty(OutlineColorId)) fillMaterialInstance.SetColor(OutlineColorId, outlineColor);
-                if (fillMaterialInstance.HasProperty(OutlineWidthId)) fillMaterialInstance.SetFloat(OutlineWidthId, outlineWidth);
-            }
-            if (maskMaterialInstance != null && maskMaterialInstance.HasProperty(OutlineWidthId))
-            {
-                maskMaterialInstance.SetFloat(OutlineWidthId, outlineWidth);
-            }
-        }
-
-        /// <summary>
-        /// Reads the current color/width from the active fill material into the serialized fields,
-        /// so the (read-only) inspector fields mirror the shared material when instances are off,
-        /// and so freshly enabled instances start out identical to the shared look.
-        /// </summary>
-        public void SyncPropertiesFromMaterials()
-        {
-            Material fill = useMaterialInstances && fillMaterialInstance != null ? fillMaterialInstance : outlineFillMaterial;
-            if (fill == null) return;
-            if (fill.HasProperty(OutlineColorId)) outlineColor = fill.GetColor(OutlineColorId);
-            if (fill.HasProperty(OutlineWidthId)) outlineWidth = fill.GetFloat(OutlineWidthId);
-        }
-
-        [System.NonSerialized] private bool warnedSharedMaterialsReadOnly;
-
-        private void WarnSharedMaterialsAreReadOnly()
-        {
-            if (warnedSharedMaterialsReadOnly) return;
-            warnedSharedMaterialsReadOnly = true;
-            Debug.LogWarning(
-                $"[{nameof(ObjectOutline)}] '{name}': OutlineColor/OutlineWidth were set while " +
-                $"{nameof(UseMaterialInstances)} is disabled. Shared material assets are read-only, " +
-                "so the change has no visual effect. Enable UseMaterialInstances for per-object " +
-                "color/width, or edit the shared material asset directly.", this);
-        }
-
-        /// <summary>
-        /// Hides the generated object in the Hierarchy window. HideFlags.HideInHierarchy does not
-        /// include DontSave, so the object is still serialized into the scene, still rendered, and
-        /// still pickable by clicking it in the Scene view.
-        /// </summary>
-        private void ApplyHideFlags()
-        {
-            if (outlineGameObject == null) return;
-            HideFlags flags = hideGeneratedObjectInHierarchy ? HideFlags.HideInHierarchy : HideFlags.None;
-            if (outlineGameObject.hideFlags == flags) return;
-            outlineGameObject.hideFlags = flags;
-#if UNITY_EDITOR
-            EditorApplication.RepaintHierarchyWindow();
-#endif
-        }
-
-        private void DestroyMaterialInstances()
-        {
-            if (maskMaterialInstance != null)
-            {
-                SafeDestroy(maskMaterialInstance);
-                maskMaterialInstance = null;
-            }
-            if (fillMaterialInstance != null)
-            {
-                SafeDestroy(fillMaterialInstance);
-                fillMaterialInstance = null;
-            }
-        }
-
-        /// <summary>Destroy that is safe both at runtime and in edit mode (incl. from OnValidate).</summary>
-        private static void SafeDestroy(Object obj)
-        {
-#if UNITY_EDITOR
-            if (!Application.isPlaying)
-            {
-                // Deferred: DestroyImmediate is not allowed from OnValidate/OnDestroy in edit mode.
-                EditorApplication.delayCall += () =>
-                {
-                    // Never destroy across a play mode transition: Unity preserves instance IDs
-                    // when it reloads the scene for play mode, so a stale deferred call would
-                    // resolve to (and delete!) the freshly loaded play-mode outline objects.
-                    if (EditorApplication.isPlayingOrWillChangePlaymode) return;
-                    if (obj != null) DestroyImmediate(obj);
-                };
-                return;
-            }
-#endif
-            Destroy(obj);
-        }
-
-        /// <summary>
-        /// Refreshes per-object state after scene loads, play mode transitions and domain
-        /// reloads: reassigns the (non-serialized) automatic stencil reference and re-syncs the
-        /// internal material instances from the shared assets. Runs once per enable — the
-        /// component still has zero per-frame cost.
-        /// </summary>
         private void OnEnable()
         {
-            if (IsCreated) ApplyMaterials();
+            if (!live.Contains(this)) live.Add(this);
+            // Awake doesn't run again after a domain reload, which tears everything down.
+            if (!built) Build();
+            stencilRef = StencilAllocator.Acquire(this);
+            ApplyMaterialProperties();
+            SyncState();
+#if UNITY_EDITOR
+            if (!Application.isPlaying) OutlineEditorBridge.RequestValidation?.Invoke(this);
+#endif
+        }
+
+        private void OnDisable()
+        {
+            StencilAllocator.Release(stencilRef, this);
+            stencilRef = 0;
+            SyncState();
         }
 
         private void OnDestroy()
         {
+            live.Remove(this);
+            StencilAllocator.Release(stencilRef, this);
+            TearDown(immediate: !Application.isPlaying);
+        }
+
+        private void Build()
+        {
+            built = true;
+            DestroyInheritedParts();
+            RebuildMaterials();
+            SyncParts();
+        }
+
+        /// <summary>
+        /// Instantiate, duplicate and copy/paste copy hidden children too. Delete the parts this
+        /// outline inherited that way (their materials belong to the original, so only the objects
+        /// go) before building its own.
+        /// </summary>
+        private void DestroyInheritedParts()
+        {
+            foreach (OutlinePartMarker marker in GetComponentsInChildren<OutlinePartMarker>(true))
+            {
+                // Parts of nested outlines are theirs to manage.
+                if (marker.Owner != null && marker.Owner != this) continue;
+                if (FindPart(marker.gameObject) != null) continue;
+                DestroyImmediate(marker.gameObject);
+            }
+        }
+
+        private void RebuildMaterials()
+        {
+            DestroyMaterial(ref maskMaterial, immediate: !Application.isPlaying);
+            DestroyMaterial(ref fillMaterial, immediate: !Application.isPlaying);
+            maskMaterial = CreateMaterial(OutlineShaders.Mask, null, "Outline Mask", OutlineShaders.MaskQueue);
+            fillMaterial = CreateMaterial(OutlineShaders.Fill, customFillMaterial, "Outline Fill", OutlineShaders.FillQueue);
+            materialsBuiltFrom = customFillMaterial;
+            materials = new[] { maskMaterial, fillMaterial };
+            ApplyMaterialProperties();
+            foreach (OutlinePart part in parts)
+            {
+                if (part.Renderer != null) part.Renderer.sharedMaterials = materials;
+            }
+        }
+
+        private static Material CreateMaterial(Shader shader, Material template, string materialName, int queue)
+        {
+            Material material = template != null ? new Material(template) : shader != null ? new Material(shader) : null;
+            if (material == null) return null;
+            material.name = materialName + " (Instance)";
+            material.hideFlags = HideFlags.HideAndDontSave;
+            // Forced even for custom materials: every mask must render before any fill.
+            material.renderQueue = queue;
+            return material;
+        }
+
+        private void ApplyMaterialProperties()
+        {
+            float zTest = occlusion == OutlineOcclusion.XRay ? (float)CompareFunction.Always : (float)CompareFunction.LessEqual;
+            if (maskMaterial != null)
+            {
+                maskMaterial.SetFloat(OutlineShaders.ZTestId, zTest);
+                maskMaterial.SetFloat(OutlineShaders.StencilRefId, stencilRef);
+            }
+            if (fillMaterial != null)
+            {
+                fillMaterial.SetFloat(OutlineShaders.ZTestId, zTest);
+                fillMaterial.SetFloat(OutlineShaders.StencilRefId, stencilRef);
+                fillMaterial.SetColor(OutlineShaders.ColorId, color);
+                fillMaterial.SetFloat(OutlineShaders.WidthId, width);
+            }
+        }
+
+        /// <summary>Creates, updates and removes parts so there is one per outlined renderer.</summary>
+        private void SyncParts()
+        {
+            GatherCandidates(candidateBuffer, includeExcluded: false);
+
+            for (int i = parts.Count - 1; i >= 0; i--)
+            {
+                OutlinePart part = parts[i];
+                if (part.GameObject != null && part.Source != null && candidateBuffer.Contains(part.Source)) continue;
+                DestroyPart(part);
+                parts.RemoveAt(i);
+            }
+
+            partSources.Clear();
+            bool missingBakes = false;
+            foreach (Renderer source in candidateBuffer)
+            {
+                Mesh sourceMesh = GetSourceMesh(source);
+                Mesh baked = FindBakedMesh(source, sourceMesh);
+                OutlinePart part = FindPart(source);
+
+                bool upToDate = part != null && part.SourceMesh == sourceMesh && part.Mesh != null &&
+                                (baked != null ? part.Mesh == baked : RuntimeBakeCache.Owns(part.Mesh));
+                if (!upToDate)
+                {
+                    Mesh mesh = baked;
+                    if (mesh == null && Application.isPlaying) mesh = RuntimeBakeCache.Acquire(sourceMesh, this);
+                    if (mesh == null)
+                    {
+                        missingBakes = true;
+                        if (part != null)
+                        {
+                            DestroyPart(part);
+                            parts.Remove(part);
+                        }
+                        continue;
+                    }
+
+                    if (part == null)
+                    {
+                        parts.Add(OutlinePart.Create(this, source, sourceMesh, mesh, materials));
+                    }
+                    else
+                    {
+                        RuntimeBakeCache.Release(part.Mesh);
+                        part.SetMesh(sourceMesh, mesh);
+                    }
+                }
+                partSources.Add(source);
+            }
+
 #if UNITY_EDITOR
-            // [ExecuteAlways] also invokes OnDestroy during engine teardowns that are NOT a real
-            // component removal: entering/exiting play mode and closing/unloading scenes. Running
-            // Remove() there used to schedule deferred DestroyImmediate calls whose captured
-            // references resolve (via Unity's preserved instance IDs) to the freshly reloaded
-            // outline objects — deleting every outline the moment play mode started. Only clean
-            // up when the component itself is genuinely being removed.
+            if (missingBakes && !Application.isPlaying) OutlineEditorBridge.RequestValidation?.Invoke(this);
+#endif
+        }
+
+        /// <summary>Copies each source's layer and enabled state to its part.</summary>
+        private void SyncState()
+        {
+            bool visible = isActiveAndEnabled;
+            foreach (OutlinePart part in parts) part.Sync(visible);
+        }
+
+        private Mesh FindBakedMesh(Renderer source, Mesh sourceMesh)
+        {
+            foreach (BakedPart baked in bakedParts)
+            {
+                if (baked.renderer == source && baked.sourceMesh == sourceMesh && baked.mesh != null) return baked.mesh;
+            }
+            return null;
+        }
+
+        private OutlinePart FindPart(Renderer source)
+        {
+            foreach (OutlinePart part in parts)
+            {
+                if (part.Source == source) return part;
+            }
+            return null;
+        }
+
+        private OutlinePart FindPart(GameObject partObject)
+        {
+            foreach (OutlinePart part in parts)
+            {
+                if (part.GameObject == partObject) return part;
+            }
+            return null;
+        }
+
+        private static void DestroyPart(OutlinePart part)
+        {
+            RuntimeBakeCache.Release(part.Mesh);
+            part.Destroy();
+        }
+
+        /// <summary>Destroys all parts and materials; the next OnEnable rebuilds them.</summary>
+        internal void TearDown(bool immediate)
+        {
+            foreach (OutlinePart part in parts)
+            {
+                RuntimeBakeCache.Release(part.Mesh);
+                part.Destroy(immediate);
+            }
+            parts.Clear();
+            partSources.Clear();
+            DestroyMaterial(ref maskMaterial, immediate);
+            DestroyMaterial(ref fillMaterial, immediate);
+            materials = null;
+            built = false;
+        }
+
+        private static void DestroyMaterial(ref Material material, bool immediate)
+        {
+            if (material == null) return;
+            if (immediate) DestroyImmediate(material);
+            else Destroy(material);
+            material = null;
+        }
+
+        private void RemoveLegacyObject()
+        {
+            if (legacyGeneratedObject == null) return;
+            GameObject legacy = legacyGeneratedObject;
+            legacyGeneratedObject = null;
+#if UNITY_EDITOR
             if (!Application.isPlaying)
             {
-                if (EditorApplication.isPlayingOrWillChangePlaymode) return; // play transition
-                if (!gameObject.scene.isLoaded) return;                      // scene closing/unloading
+                // Objects that come from a prefab can't be deleted from an instance of it.
+                if (PrefabUtility.IsPartOfPrefabInstance(legacy)) legacy.SetActive(false);
+                else DestroyImmediate(legacy);
+                EditorUtility.SetDirty(this);
+                return;
             }
 #endif
-            // Clean up the generated object, mesh and material instances when the component is
-            // removed (works in edit mode thanks to [ExecuteAlways]).
-            Remove();
+            Destroy(legacy);
+        }
+
+        /// <summary>
+        /// The renderers this outline covers: its own and, with <see cref="IncludeChildren"/>, its
+        /// children's, minus renderers that belong to a nested outline.
+        /// </summary>
+        internal void GatherCandidates(List<Renderer> results, bool includeExcluded)
+        {
+            results.Clear();
+            if (includeChildren) GetComponentsInChildren(true, rendererBuffer);
+            else GetComponents(rendererBuffer);
+
+            foreach (Renderer renderer in rendererBuffer)
+            {
+                if (!IsOutlinable(renderer)) continue;
+                // The nearest outline above a renderer owns it.
+                if (renderer.GetComponentInParent<ObjectOutline>(true) != this) continue;
+                if (!includeExcluded && excludedRenderers.Contains(renderer)) continue;
+                results.Add(renderer);
+            }
+        }
+
+        private static bool IsOutlinable(Renderer renderer)
+        {
+            // Skips our own parts and other tools' transient helper objects.
+            if ((renderer.gameObject.hideFlags & HideFlags.DontSaveInEditor) != 0) return false;
+            return GetSourceMesh(renderer) != null;
+        }
+
+        internal static Mesh GetSourceMesh(Renderer renderer)
+        {
+            if (renderer is MeshRenderer && renderer.TryGetComponent(out MeshFilter filter)) return filter.sharedMesh;
+            return null;
+        }
+
+        // Internal accessors for the editor and tests.
+        internal static IReadOnlyList<ObjectOutline> Live => live;
+        internal IReadOnlyList<BakedPart> BakedParts => bakedParts;
+        internal IReadOnlyList<OutlinePart> BuiltParts => parts;
+        internal Material MaskMaterial => maskMaterial;
+        internal Material FillMaterial => fillMaterial;
+        internal int StencilRef => stencilRef;
+        internal bool IsExcluded(Renderer renderer) => excludedRenderers.Contains(renderer);
+
+        internal void SetBakedParts(List<BakedPart> value)
+        {
+            bakedParts = value;
+            Refresh();
         }
 
 #if UNITY_EDITOR
-        /// <summary>
-        /// Called by the editor when the component is first added (or reset). Auto-assigns the
-        /// default outline materials and auto-creates the outline — a MeshFilter is guaranteed by
-        /// RequireComponent.
-        /// </summary>
-        private void Reset()
+        [InitializeOnLoadMethod]
+        private static void TearDownBeforeDomainReload()
         {
-            if (outlineMaskMaterial == null) outlineMaskMaterial = FindDefaultMaterial("OutlineMask");
-            if (outlineFillMaterial == null) outlineFillMaterial = FindDefaultMaterial("OutlineFill");
-            SyncPropertiesFromMaterials();
-
-            if (outlineMaskMaterial == null || outlineFillMaterial == null) return;
-
-            // Creating objects directly from Reset is not allowed; defer one editor tick.
-            EditorApplication.delayCall += () =>
+            // A domain reload forgets the references to parts and materials, which are never saved:
+            // destroy them first so they aren't leaked. OnEnable rebuilds them afterwards.
+            AssemblyReloadEvents.beforeAssemblyReload += () =>
             {
-                if (this == null || IsCreated) return;
-                Create();
-                EditorUtility.SetDirty(this);
+                for (int i = live.Count - 1; i >= 0; i--)
+                {
+                    if (live[i] != null) live[i].TearDown(immediate: true);
+                }
             };
         }
 
-        /// <summary>
-        /// Keeps materials/hide flags in sync when inspector fields change, and schedules a rebake
-        /// if the source mesh was swapped. (Mesh swaps on the MeshFilter itself are additionally
-        /// caught globally by OutlineMeshChangeWatcher in the Editor assembly.)
-        /// </summary>
         private void OnValidate()
         {
-            if (!IsCreated) return;
-
-            ApplyMaterials();
-            // With instances off the shared materials are the source of truth; keep the
-            // (read-only) inspector fields mirroring them.
-            if (!useMaterialInstances) SyncPropertiesFromMaterials();
-            ApplyHideFlags();
-
-            if (IsBakeStale)
-            {
-                EditorApplication.delayCall += () =>
-                {
-                    if (this != null && IsBakeStale) Recalculate();
-                };
-            }
+            width = Mathf.Max(0f, width);
+            ApplyMaterialProperties();
+            // Not awake yet, or a prefab asset.
+            if (!built) return;
+            // Structural changes (children, exclusions, custom material) create and destroy objects,
+            // which OnValidate doesn't allow: defer them one editor tick. (update rather than
+            // delayCall, which doesn't run in batch mode.)
+            EditorApplication.update -= DeferredRefresh;
+            EditorApplication.update += DeferredRefresh;
         }
 
-        private static Material FindDefaultMaterial(string materialName)
+        private void DeferredRefresh()
         {
-            // Known locations first (UPM package install, then Assets install)...
-            var material = AssetDatabase.LoadAssetAtPath<Material>(
-                $"Packages/com.reromanlee.meshoutline/Runtime/Materials/{materialName}.mat");
-            if (material != null) return material;
-
-            material = AssetDatabase.LoadAssetAtPath<Material>(
-                $"Assets/MeshOutline/Runtime/Materials/{materialName}.mat");
-            if (material != null) return material;
-
-            // ...then fall back to a project-wide search by name.
-            foreach (string guid in AssetDatabase.FindAssets($"t:Material {materialName}"))
-            {
-                string path = AssetDatabase.GUIDToAssetPath(guid);
-                material = AssetDatabase.LoadAssetAtPath<Material>(path);
-                if (material != null && material.name == materialName) return material;
-            }
-            return null;
+            EditorApplication.update -= DeferredRefresh;
+            if (this == null || !built) return;
+            // About to enter play mode: the scene reloads anyway.
+            if (EditorApplication.isPlayingOrWillChangePlaymode && !Application.isPlaying) return;
+            if (materialsBuiltFrom != customFillMaterial) RebuildMaterials();
+            Refresh();
+            if (!Application.isPlaying) OutlineEditorBridge.RequestValidation?.Invoke(this);
         }
 #endif
     }
