@@ -1,15 +1,18 @@
 {
   "name": "com.reromanlee.meshoutline",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "displayName": "MeshOutline",
-  "description": "Highly efficient prebaked mesh outlines. Smooth normals are baked into UV4 at edit time and rendered with a two-pass stencil mask + extruded fill, giving crack-free outlines with zero per-frame CPU cost \u2014 no post-processing, no render textures, no command buffers.",
-  "unity": "2021.3",
+  "description": "Constant-width outlines for any mesh, skinned mesh or whole hierarchy, with zero per-frame cost. Outline meshes are baked ahead of time into a shared cache and drawn with a stencil mask and a smoothed-normal extrusion, so duplicates, prefabs, undo and runtime spawning just work. URP and Built-in.",
+  "unity": "2022.3",
   "keywords": [
     "outline",
     "highlight",
+    "selection",
+    "x-ray",
     "mesh",
-    "shader",
-    "stencil"
+    "skinned",
+    "stencil",
+    "urp"
   ],
   "license": "MIT",
   "licensesUrl": "https://github.com/reromanlee/MeshOutline/blob/main/LICENSE.md",
