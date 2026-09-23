@@ -1,0 +1,25 @@
+{
+    "name": "reromanlee.MeshOutline.Tests.Editor",
+    "rootNamespace": "reromanlee.MeshOutline.Tests",
+    "references": [
+        "reromanlee.MeshOutline",
+        "reromanlee.MeshOutline.Editor",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
