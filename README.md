@@ -22,7 +22,7 @@
 Open **Window > Package Manager**, click **+ > Install package from git URL...** and paste:
 
 ```
-https://github.com/reromanlee/MeshOutline.git
+https://github.com/reromanlee/MeshOutline.git?path=/UnityPackage
 ```
 
 Or add it to `Packages/manifest.json`:
@@ -30,10 +30,12 @@ Or add it to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.reromanlee.meshoutline": "https://github.com/reromanlee/MeshOutline.git"
+    "com.reromanlee.meshoutline": "https://github.com/reromanlee/MeshOutline.git?path=/UnityPackage"
   }
 }
 ```
+
+To pin a release, add its tag after the path: `...MeshOutline.git?path=/UnityPackage#<version>`. Releases 2.0.0 and older were published from the repository root, so pin those without the path: `...MeshOutline.git#2.0.0`.
 
 Requires Unity 2022.3 or newer and a stencil buffer (the default 24/32-bit depth-stencil setup).
 

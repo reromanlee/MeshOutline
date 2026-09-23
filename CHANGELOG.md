@@ -4,6 +4,16 @@ All notable changes to this package are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this package follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The package moved into the repository's `UnityPackage/` folder,** so the git URL needs a path:
+  `https://github.com/reromanlee/MeshOutline.git?path=/UnityPackage`. Installs from the old URL keep
+  working until they update, then fail to resolve; replace the URL in **Packages/manifest.json**.
+  Tags 2.0.0 and older still install from the old URL.
+- The package now includes its LICENSE.md.
+
 ## [2.0.0] - 2026-09-23
 
 A redesign around one idea: an outline saves only its settings and references to shared, baked
@@ -77,5 +87,6 @@ rebaked automatically when it loads.
 
 First release.
 
+[Unreleased]: https://github.com/reromanlee/MeshOutline/compare/2.0.0...HEAD
 [2.0.0]: https://github.com/reromanlee/MeshOutline/compare/1.0.0...2.0.0
 [1.0.0]: https://github.com/reromanlee/MeshOutline/releases/tag/1.0.0
