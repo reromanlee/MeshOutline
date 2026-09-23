@@ -5,7 +5,8 @@ namespace reromanlee.MeshOutline
 {
     /// <summary>
     /// One hidden, never-saved renderer that draws the outline for one source renderer. It is a
-    /// child of the source with an identity transform, so it follows the source for free.
+    /// child of the source with an identity transform, so it follows the source for free; a
+    /// skinned part shares the source's bones, so it deforms with it.
     /// </summary>
     internal sealed class OutlinePart
     {
@@ -21,6 +22,9 @@ namespace reromanlee.MeshOutline
 
         /// <summary>The outline mesh being drawn.</summary>
         internal Mesh Mesh { get; private set; }
+
+        /// <summary>Hidden in edit mode because its source only appears in LOD levels past LOD0.</summary>
+        internal bool HiddenByLod;
 
         private OutlinePart(Renderer source, GameObject gameObject, Renderer renderer, MeshFilter filter, Mesh sourceMesh, Mesh mesh)
         {
@@ -38,9 +42,27 @@ namespace reromanlee.MeshOutline
             gameObject.transform.SetParent(source.transform, worldPositionStays: false);
             gameObject.AddComponent<OutlinePartMarker>().Initialize(owner, source);
 
-            var filter = gameObject.AddComponent<MeshFilter>();
-            filter.sharedMesh = mesh;
-            var renderer = gameObject.AddComponent<MeshRenderer>();
+            Renderer renderer;
+            MeshFilter filter = null;
+            if (source is SkinnedMeshRenderer skinnedSource)
+            {
+                var skinned = gameObject.AddComponent<SkinnedMeshRenderer>();
+                skinned.sharedMesh = mesh;
+                // Same bones, root and quality as the source, so both deform identically.
+                skinned.bones = skinnedSource.bones;
+                skinned.rootBone = skinnedSource.rootBone;
+                skinned.quality = skinnedSource.quality;
+                skinned.updateWhenOffscreen = skinnedSource.updateWhenOffscreen;
+                skinned.localBounds = skinnedSource.localBounds;
+                skinned.skinnedMotionVectors = false;
+                renderer = skinned;
+            }
+            else
+            {
+                filter = gameObject.AddComponent<MeshFilter>();
+                filter.sharedMesh = mesh;
+                renderer = gameObject.AddComponent<MeshRenderer>();
+            }
 
             // A purely visual overlay: opt out of everything that costs performance.
             renderer.shadowCastingMode = ShadowCastingMode.Off;
@@ -58,16 +80,23 @@ namespace reromanlee.MeshOutline
         {
             SourceMesh = sourceMesh;
             Mesh = mesh;
-            filter.sharedMesh = mesh;
+            if (Renderer is SkinnedMeshRenderer skinned) skinned.sharedMesh = mesh;
+            else filter.sharedMesh = mesh;
         }
 
-        /// <summary>Copies the source's layer, rendering layers and enabled state.</summary>
+        /// <summary>Copies the source's layer, rendering layers, enabled state and blend-shape weights.</summary>
         internal void Sync(bool outlineVisible)
         {
             if (Source == null || Renderer == null) return;
             GameObject.layer = Source.gameObject.layer;
             Renderer.renderingLayerMask = Source.renderingLayerMask;
-            Renderer.enabled = outlineVisible && Source.enabled;
+            Renderer.enabled = outlineVisible && Source.enabled && !HiddenByLod;
+
+            if (Source is SkinnedMeshRenderer skinnedSource && Renderer is SkinnedMeshRenderer skinned && Mesh != null)
+            {
+                int count = Mesh.blendShapeCount;
+                for (int i = 0; i < count; i++) skinned.SetBlendShapeWeight(i, skinnedSource.GetBlendShapeWeight(i));
+            }
         }
 
         internal void Destroy() => Destroy(immediate: !Application.isPlaying);

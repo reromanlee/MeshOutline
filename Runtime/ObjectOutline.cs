@@ -65,6 +65,10 @@ namespace reromanlee.MeshOutline
         [Tooltip("Optional material for the fill pass, e.g. an animated outline. Its shader must follow the built-in fill shader's _StencilRef and _ZTest conventions.")]
         private Material customFillMaterial;
 
+        [SerializeField]
+        [Tooltip("Copy each source renderer's enabled state, layer and blend-shape weights to the outline every frame, e.g. to follow facial animation. When off (no per-frame cost), they're copied when the outline is enabled and on Refresh().")]
+        private bool trackSourceEveryFrame;
+
         // Written by the editor. Serialized so builds and prefab instances render without any
         // runtime baking.
         [SerializeField, HideInInspector] private List<BakedPart> bakedParts = new List<BakedPart>();
@@ -82,6 +86,9 @@ namespace reromanlee.MeshOutline
         private Material materialsBuiltFrom;
         private int stencilRef;
         private bool built;
+
+        // LODGroups this outline added its parts to (play mode only).
+        private readonly List<LODGroup> lodGroups = new List<LODGroup>();
 
         private static readonly List<ObjectOutline> live = new List<ObjectOutline>();
         private static readonly List<Renderer> rendererBuffer = new List<Renderer>();
@@ -139,6 +146,22 @@ namespace reromanlee.MeshOutline
         public IReadOnlyList<Renderer> Parts => partSources;
 
         /// <summary>
+        /// Copy each source renderer's enabled state, layer and blend-shape weights to the outline
+        /// every frame (right before rendering), e.g. to follow facial animation. When off, the
+        /// default, nothing runs per frame: they're copied when the outline is enabled and on
+        /// <see cref="Refresh"/>.
+        /// </summary>
+        public bool TrackSourceEveryFrame
+        {
+            get => trackSourceEveryFrame;
+            set
+            {
+                trackSourceEveryFrame = value;
+                UpdateTracking();
+            }
+        }
+
+        /// <summary>
         /// Optional material for the fill pass, e.g. an animated outline. Its shader must follow
         /// the built-in fill shader's <c>_StencilRef</c> and <c>_ZTest</c> conventions. The
         /// outline uses a copy; the material itself is never modified.
@@ -166,8 +189,9 @@ namespace reromanlee.MeshOutline
 
         /// <summary>
         /// Re-gathers the outlined renderers after the hierarchy changed at runtime (meshes added,
-        /// removed, re-parented or swapped), and copies each source renderer's enabled state and
-        /// layer again. Cheap when nothing changed. The editor calls this automatically.
+        /// removed, re-parented or swapped), and copies each source renderer's enabled state,
+        /// layer and blend-shape weights again. Cheap when nothing changed. The editor calls this
+        /// automatically.
         /// </summary>
         public void Refresh()
         {
@@ -192,6 +216,7 @@ namespace reromanlee.MeshOutline
             stencilRef = StencilAllocator.Acquire(this);
             ApplyMaterialProperties();
             SyncState();
+            UpdateTracking();
 #if UNITY_EDITOR
             if (!Application.isPlaying) OutlineEditorBridge.RequestValidation?.Invoke(this);
 #endif
@@ -202,13 +227,21 @@ namespace reromanlee.MeshOutline
             StencilAllocator.Release(stencilRef, this);
             stencilRef = 0;
             SyncState();
+            UpdateTracking();
         }
 
         private void OnDestroy()
         {
             live.Remove(this);
+            OutlineTracking.Remove(this);
             StencilAllocator.Release(stencilRef, this);
             TearDown(immediate: !Application.isPlaying);
+        }
+
+        private void UpdateTracking()
+        {
+            if (trackSourceEveryFrame && isActiveAndEnabled) OutlineTracking.Add(this);
+            else OutlineTracking.Remove(this);
         }
 
         private void Build()
@@ -329,16 +362,83 @@ namespace reromanlee.MeshOutline
                 partSources.Add(source);
             }
 
+            SyncLods();
+
 #if UNITY_EDITOR
             if (missingBakes && !Application.isPlaying) OutlineEditorBridge.RequestValidation?.Invoke(this);
 #endif
         }
 
-        /// <summary>Copies each source's layer and enabled state to its part.</summary>
-        private void SyncState()
+        /// <summary>Copies each source's layer, enabled state and blend-shape weights to its part.</summary>
+        internal void SyncState()
         {
             bool visible = isActiveAndEnabled;
             foreach (OutlinePart part in parts) part.Sync(visible);
+        }
+
+        /// <summary>
+        /// Keeps parts in step with LODGroups. At runtime each part joins its source's LOD level,
+        /// so it switches and culls with it at no per-frame cost. In edit mode, where changing a
+        /// saved LODGroup would leave overrides behind, parts of levels past LOD0 are hidden.
+        /// </summary>
+        private void SyncLods()
+        {
+            if (!Application.isPlaying)
+            {
+                foreach (OutlinePart part in parts) part.HiddenByLod = FindLodLevel(part.Source, out _) > 0;
+                return;
+            }
+
+            DetachFromLodGroups();
+            foreach (OutlinePart part in parts)
+            {
+                if (part.Renderer == null || FindLodLevel(part.Source, out LODGroup group) < 0) continue;
+                LOD[] lods = group.GetLODs();
+                for (int level = 0; level < lods.Length; level++)
+                {
+                    Renderer[] renderers = lods[level].renderers;
+                    if (Array.IndexOf(renderers, part.Source) < 0) continue;
+                    Array.Resize(ref renderers, renderers.Length + 1);
+                    renderers[renderers.Length - 1] = part.Renderer;
+                    lods[level].renderers = renderers;
+                }
+                group.SetLODs(lods);
+                if (!lodGroups.Contains(group)) lodGroups.Add(group);
+            }
+        }
+
+        private void DetachFromLodGroups()
+        {
+            foreach (LODGroup group in lodGroups)
+            {
+                if (group == null) continue;
+                LOD[] lods = group.GetLODs();
+                for (int level = 0; level < lods.Length; level++)
+                {
+                    lods[level].renderers = Array.FindAll(lods[level].renderers, r => r != null && !IsOwnPart(r));
+                }
+                group.SetLODs(lods);
+            }
+            lodGroups.Clear();
+        }
+
+        private bool IsOwnPart(Renderer renderer) =>
+            renderer.TryGetComponent(out OutlinePartMarker marker) && marker.Owner == this;
+
+        /// <summary>The lowest LOD level listing this renderer, or -1 if no LODGroup above it does.</summary>
+        private static int FindLodLevel(Renderer renderer, out LODGroup group)
+        {
+            for (Transform t = renderer.transform; t != null; t = t.parent)
+            {
+                if (!t.TryGetComponent(out group)) continue;
+                LOD[] lods = group.GetLODs();
+                for (int level = 0; level < lods.Length; level++)
+                {
+                    if (Array.IndexOf(lods[level].renderers, renderer) >= 0) return level;
+                }
+            }
+            group = null;
+            return -1;
         }
 
         private Mesh FindBakedMesh(Renderer source, Mesh sourceMesh)
@@ -377,6 +477,7 @@ namespace reromanlee.MeshOutline
         /// <summary>Destroys all parts and materials; the next OnEnable rebuilds them.</summary>
         internal void TearDown(bool immediate)
         {
+            DetachFromLodGroups();
             foreach (OutlinePart part in parts)
             {
                 RuntimeBakeCache.Release(part.Mesh);
@@ -445,6 +546,7 @@ namespace reromanlee.MeshOutline
 
         internal static Mesh GetSourceMesh(Renderer renderer)
         {
+            if (renderer is SkinnedMeshRenderer skinned) return skinned.sharedMesh;
             if (renderer is MeshRenderer && renderer.TryGetComponent(out MeshFilter filter)) return filter.sharedMesh;
             return null;
         }
@@ -483,6 +585,7 @@ namespace reromanlee.MeshOutline
         {
             width = Mathf.Max(0f, width);
             ApplyMaterialProperties();
+            UpdateTracking();
             // Not awake yet, or a prefab asset.
             if (!built) return;
             // Structural changes (children, exclusions, custom material) create and destroy objects,

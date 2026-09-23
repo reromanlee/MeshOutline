@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -6,7 +7,8 @@ namespace reromanlee.MeshOutline
 {
     /// <summary>
     /// Builds the outline mesh for a source mesh: the same vertices, with NORMAL replaced by
-    /// smoothed (position-averaged) normals and every surface submesh merged into one.
+    /// smoothed (position-averaged) normals and every surface submesh merged into one, plus the
+    /// skinning data and blend-shape position deltas needed to deform like the source.
     /// </summary>
     /// <remarks>
     /// The bake is deterministic, so the same source always produces identical data and baked
@@ -31,7 +33,38 @@ namespace reromanlee.MeshOutline
             target.SetNormals(CalculateSmoothNormals(vertices, normals, triangles));
             // One submesh: the renderer draws it twice, once per material (mask, then fill).
             target.SetTriangles(triangles, 0, calculateBounds: false);
+            CopySkinning(source, target);
+            CopyBlendShapes(source, target);
             target.bounds = source.bounds;
+        }
+
+        /// <summary>Bind poses and bone weights, so a skinned part deforms exactly like its source.</summary>
+        private static void CopySkinning(Mesh source, Mesh target)
+        {
+            Matrix4x4[] bindposes = source.bindposes;
+            if (bindposes.Length == 0) return;
+            target.bindposes = bindposes;
+            NativeArray<byte> bonesPerVertex = source.GetBonesPerVertex();
+            if (bonesPerVertex.Length > 0) target.SetBoneWeights(bonesPerVertex, source.GetAllBoneWeights());
+        }
+
+        private static void CopyBlendShapes(Mesh source, Mesh target)
+        {
+            int vertexCount = source.vertexCount;
+            var positions = new Vector3[vertexCount];
+            var normals = new Vector3[vertexCount];
+            var tangents = new Vector3[vertexCount];
+            for (int shape = 0; shape < source.blendShapeCount; shape++)
+            {
+                string shapeName = source.GetBlendShapeName(shape);
+                for (int frame = 0; frame < source.GetBlendShapeFrameCount(shape); frame++)
+                {
+                    source.GetBlendShapeFrameVertices(shape, frame, positions, normals, tangents);
+                    // Positions only: the normal deltas belong to the source's split normals, and
+                    // applying them to the smoothed ones could open cracks at hard edges mid-morph.
+                    target.AddBlendShapeFrame(shapeName, source.GetBlendShapeFrameWeight(shape, frame), positions, null, null);
+                }
+            }
         }
 
         /// <summary>
@@ -57,6 +90,25 @@ namespace reromanlee.MeshOutline
                 hash.Append((int)source.GetTopology(submesh));
                 source.GetIndices(indices, submesh);
                 hash.Append(indices);
+            }
+
+            hash.Append(source.bindposes);
+            hash.Append(source.GetBonesPerVertex().ToArray());
+            hash.Append(source.GetAllBoneWeights().ToArray());
+
+            hash.Append(source.blendShapeCount);
+            var deltas = new Vector3[source.vertexCount];
+            var unusedNormals = new Vector3[source.vertexCount];
+            var unusedTangents = new Vector3[source.vertexCount];
+            for (int shape = 0; shape < source.blendShapeCount; shape++)
+            {
+                hash.Append(source.GetBlendShapeName(shape));
+                for (int frame = 0; frame < source.GetBlendShapeFrameCount(shape); frame++)
+                {
+                    hash.Append(source.GetBlendShapeFrameWeight(shape, frame));
+                    source.GetBlendShapeFrameVertices(shape, frame, deltas, unusedNormals, unusedTangents);
+                    hash.Append(deltas);
+                }
             }
             return hash;
         }
