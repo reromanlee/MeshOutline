@@ -1,0 +1,4 @@
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("reromanlee.MeshOutline.Editor")]
+[assembly: InternalsVisibleTo("reromanlee.MeshOutline.Tests.Editor")]

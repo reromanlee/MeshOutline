@@ -1,0 +1,20 @@
+{
+    "name": "reromanlee.MeshOutline.Editor",
+    "rootNamespace": "reromanlee.MeshOutline.Editor",
+    "references": [
+        "reromanlee.MeshOutline"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "UNITY_EDITOR"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
