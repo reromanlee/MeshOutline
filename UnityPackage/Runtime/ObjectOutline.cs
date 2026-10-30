@@ -386,7 +386,8 @@ namespace reromanlee.MeshOutline
 
                 bool upToDate = part != null && part.SourceMesh == sourceMesh && part.Mesh != null &&
                                 (baked != null ? part.Mesh == baked : RuntimeBakeCache.Owns(part.Mesh));
-                if (!upToDate)
+                if (upToDate) part.SyncSkinning();
+                else
                 {
                     Mesh mesh = baked;
                     if (mesh == null && Application.isPlaying) mesh = RuntimeBakeCache.Acquire(source, sourceMesh, this);
