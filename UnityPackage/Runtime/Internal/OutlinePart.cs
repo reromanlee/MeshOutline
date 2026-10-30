@@ -64,6 +64,8 @@ namespace reromanlee.MeshOutline
                 renderer = gameObject.AddComponent<MeshRenderer>();
             }
 
+            // Hidden until the outline syncs it: the outline may be disabled.
+            renderer.enabled = false;
             // A purely visual overlay: opt out of everything that costs performance.
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;

@@ -287,6 +287,9 @@ namespace reromanlee.MeshOutline
             DestroyInheritedParts();
             RebuildMaterials();
             SyncParts();
+            // Awake also runs for a disabled component, and then no OnEnable follows to hide the
+            // new parts.
+            SyncState();
         }
 
         /// <summary>
