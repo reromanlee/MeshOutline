@@ -41,13 +41,17 @@ namespace reromanlee.MeshOutline
             public string sourceHash;
         }
 
+        private const float DefaultWidth = 4f;
+        private const float DefaultReferenceDistance = 10f;
+        private const float MinReferenceDistance = 0.01f;
+
         [SerializeField, ColorUsage(true, true), FormerlySerializedAs("outlineColor")]
         [Tooltip("Outline color. HDR colors glow when bloom is enabled.")]
         private Color color = Color.white;
 
         [SerializeField, Min(0f), FormerlySerializedAs("outlineWidth")]
         [Tooltip("Outline width, in pixels at 1080p (Exact Pixels: in screen pixels).")]
-        private float width = 4f;
+        private float width = DefaultWidth;
 
         [SerializeField]
         [Tooltip("Pixels at 1080p: the same share of the screen at any resolution, the same thickness at any distance.\n" +
@@ -55,9 +59,9 @@ namespace reromanlee.MeshOutline
                  "Scales with Distance: like part of the object; Width pixels (at 1080p, 60° field of view) at Reference Distance, thinner farther away, thicker up close.")]
         private OutlineWidthMode widthMode = OutlineWidthMode.PixelsAt1080p;
 
-        [SerializeField, Min(0.01f)]
+        [SerializeField, Min(MinReferenceDistance)]
         [Tooltip("Scales with Distance: the distance, in meters, at which the outline is Width pixels thick (at 1080p with a 60° field of view).")]
-        private float referenceDistance = 10f;
+        private float referenceDistance = DefaultReferenceDistance;
 
         [SerializeField]
         [Tooltip("Normal: hidden behind other geometry, like any object. X-Ray: always visible, even through walls.")]
@@ -105,24 +109,28 @@ namespace reromanlee.MeshOutline
         private static readonly List<Renderer> candidateBuffer = new List<Renderer>();
 
         /// <summary>Outline color. HDR colors glow when bloom is enabled.</summary>
+        /// <remarks>A color with a NaN or infinite component is ignored, with an error.</remarks>
         public Color Color
         {
             get => color;
             set
             {
+                if (!IsFinite(value, nameof(Color))) return;
                 color = value;
                 ApplyMaterialProperties();
             }
         }
 
         /// <summary>
-        /// Outline width in pixels: at 1080p by default, see <see cref="WidthMode"/>.
+        /// Outline width in pixels: at 1080p by default, see <see cref="WidthMode"/>. Negative
+        /// values become 0; NaN and infinity are ignored, with an error.
         /// </summary>
         public float Width
         {
             get => width;
             set
             {
+                if (!IsFinite(value, nameof(Width))) return;
                 width = Mathf.Max(0f, value);
                 ApplyMaterialProperties();
             }
@@ -145,13 +153,15 @@ namespace reromanlee.MeshOutline
         /// <summary>
         /// For <see cref="OutlineWidthMode.ScalesWithDistance"/>: the distance, in meters, at which
         /// the outline is <see cref="Width"/> pixels thick (at 1080p with a 60° field of view).
+        /// At least 0.01; NaN and infinity are ignored, with an error.
         /// </summary>
         public float ReferenceDistance
         {
             get => referenceDistance;
             set
             {
-                referenceDistance = Mathf.Max(0.01f, value);
+                if (!IsFinite(value, nameof(ReferenceDistance))) return;
+                referenceDistance = Mathf.Max(MinReferenceDistance, value);
                 ApplyMaterialProperties();
             }
         }
@@ -614,6 +624,25 @@ namespace reromanlee.MeshOutline
             return null;
         }
 
+        private bool IsFinite(float value, string property)
+        {
+            if (!float.IsNaN(value) && !float.IsInfinity(value)) return true;
+            Debug.LogError($"[MeshOutline] {property} of '{name}' must be a finite number, not {value}; the value was ignored.", this);
+            return false;
+        }
+
+        private bool IsFinite(Color value, string property)
+        {
+            if (IsFinite(value)) return true;
+            Debug.LogError($"[MeshOutline] {property} of '{name}' must have finite components, not {value}; the value was ignored.", this);
+            return false;
+        }
+
+        // float.IsFinite is missing from the .NET Framework API compatibility level.
+        private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+        private static bool IsFinite(Color value) => IsFinite(value.r) && IsFinite(value.g) && IsFinite(value.b) && IsFinite(value.a);
+
         // Internal accessors for the editor and tests.
         internal static IReadOnlyList<ObjectOutline> Live => live;
         internal IReadOnlyList<BakedPart> BakedParts => bakedParts;
@@ -646,8 +675,10 @@ namespace reromanlee.MeshOutline
 
         private void OnValidate()
         {
-            width = Mathf.Max(0f, width);
-            referenceDistance = Mathf.Max(0.01f, referenceDistance);
+            // Hand-edited or merged YAML can hold anything: never pass NaN or infinity to the shader.
+            width = IsFinite(width) ? Mathf.Max(0f, width) : DefaultWidth;
+            referenceDistance = IsFinite(referenceDistance) ? Mathf.Max(MinReferenceDistance, referenceDistance) : DefaultReferenceDistance;
+            if (!IsFinite(color)) color = Color.white;
             ApplyMaterialProperties();
             UpdateTracking();
             // Not awake yet, or a prefab asset.
