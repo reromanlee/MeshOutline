@@ -1,6 +1,6 @@
 {
   "name": "com.reromanlee.meshoutline",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "displayName": "MeshOutline",
   "description": "Constant-width outlines for any mesh, skinned mesh or whole hierarchy, with zero per-frame cost. Outline meshes are baked ahead of time into a shared cache and drawn with a stencil mask and a smoothed-normal extrusion, so duplicates, prefabs, undo and runtime spawning just work. URP and Built-in.",
   "unity": "2022.3",
