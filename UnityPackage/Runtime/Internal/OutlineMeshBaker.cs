@@ -151,12 +151,11 @@ namespace reromanlee.MeshOutline
         {
             int count = vertices.Count;
             var groupOf = new int[count];
-            var sums = new List<Vector3>();
-            var groups = new Dictionary<Vector3, int>(count);
+            var sums = new List<Vector3>(count);
+            var groups = new Dictionary<Vector3, int>(count, PositionComparer.Instance);
             for (int i = 0; i < count; i++)
             {
-                // Adding zero turns -0 into +0: they compare equal but hash differently.
-                Vector3 key = vertices[i] + Vector3.zero;
+                Vector3 key = vertices[i];
                 if (!groups.TryGetValue(key, out int group))
                 {
                     group = sums.Count;
@@ -195,6 +194,49 @@ namespace reromanlee.MeshOutline
                 else smooth.Add(Vector3.up);
             }
             return smooth;
+        }
+
+        /// <summary>
+        /// Exact position equality with a well-mixed hash. Vector3's own hash collides heavily on
+        /// grid-aligned positions (terrain, voxels, modular kits), which made welding large meshes
+        /// several times slower.
+        /// </summary>
+        private sealed class PositionComparer : IEqualityComparer<Vector3>
+        {
+            internal static readonly PositionComparer Instance = new PositionComparer();
+
+            // float.Equals treats -0 and +0 as equal, and NaN as equal to itself.
+            public bool Equals(Vector3 a, Vector3 b) => a.x.Equals(b.x) && a.y.Equals(b.y) && a.z.Equals(b.z);
+
+            public int GetHashCode(Vector3 position)
+            {
+                uint hash = Mix(Bits(position.x));
+                hash = Mix(hash ^ Bits(position.y));
+                hash = Mix(hash ^ Bits(position.z));
+                return (int)hash;
+            }
+
+            // Hashes -0 like +0 and every NaN alike, to match Equals.
+            private static uint Bits(float value)
+            {
+                if (value == 0f) return 0u;
+                if (float.IsNaN(value)) return 0x7FC00000u;
+                return unchecked((uint)value.GetHashCode());
+            }
+
+            // MurmurHash3's 32-bit finalizer.
+            private static uint Mix(uint hash)
+            {
+                unchecked
+                {
+                    hash ^= hash >> 16;
+                    hash *= 0x85EBCA6Bu;
+                    hash ^= hash >> 13;
+                    hash *= 0xC2B2AE35u;
+                    hash ^= hash >> 16;
+                    return hash;
+                }
+            }
         }
     }
 }
