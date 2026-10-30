@@ -18,7 +18,8 @@ namespace reromanlee.MeshOutline.Editor
             Excluded,
             Baking,
             Baked,
-            BakedInScene
+            BakedInScene,
+            RuntimeOnly
         }
 
         private static class Styles
@@ -41,6 +42,8 @@ namespace reromanlee.MeshOutline.Editor
                 "Its mesh isn't an asset (e.g. ProBuilder), so the outline mesh is stored in the scene; it's rebaked when the mesh changes.");
             public static readonly GUIContent Baked = new GUIContent("baked",
                 "Uses the shared outline mesh cache (Project Settings > Mesh Outline).");
+            public static readonly GUIContent RuntimeOnly = new GUIContent("not in prefab",
+                "Its mesh isn't an asset, so a prefab can't store its outline mesh. Instances in a scene bake it into the scene; instances spawned at runtime bake it on the spot, which needs Read/Write.");
             public static readonly GUIContent PingRenderer = new GUIContent(string.Empty, "Click to highlight the renderer.");
 
             public static readonly GUIStyle Status = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
@@ -76,6 +79,19 @@ namespace reromanlee.MeshOutline.Editor
             includeChildren = serializedObject.FindProperty("includeChildren");
             customFillMaterial = serializedObject.FindProperty("customFillMaterial");
             trackSourceEveryFrame = serializedObject.FindProperty("trackSourceEveryFrame");
+            RequestPrefabAssetBakes();
+        }
+
+        /// <summary>
+        /// Prefab assets never load into a scene, so nothing else bakes their outlines: bake them
+        /// when they're shown or edited here, and save them like any inspector edit.
+        /// </summary>
+        private void RequestPrefabAssetBakes()
+        {
+            foreach (Object t in targets)
+            {
+                if (t is ObjectOutline outline && OutlineBakeValidator.IsEditablePrefabAsset(outline)) OutlineBakeValidator.Request(outline);
+            }
         }
 
         public override void OnInspectorGUI()
@@ -101,7 +117,7 @@ namespace reromanlee.MeshOutline.Editor
             }
             EditorGUILayout.PropertyField(occlusion);
             EditorGUILayout.PropertyField(includeChildren);
-            serializedObject.ApplyModifiedProperties();
+            if (serializedObject.ApplyModifiedProperties()) RequestPrefabAssetBakes();
 
             EditorGUILayout.Space();
             if (targets.Length == 1) DrawParts((ObjectOutline)target);
@@ -117,7 +133,7 @@ namespace reromanlee.MeshOutline.Editor
                     EditorGUILayout.PropertyField(trackSourceEveryFrame);
                 }
             }
-            serializedObject.ApplyModifiedProperties();
+            if (serializedObject.ApplyModifiedProperties()) RequestPrefabAssetBakes();
 
             EditorGUILayout.Space();
             DrawSummary();
@@ -150,7 +166,12 @@ namespace reromanlee.MeshOutline.Editor
                     {
                         Undo.RecordObject(outline, include ? "Include Renderer in Outline" : "Exclude Renderer from Outline");
                         outline.SetExcluded(renderer, !include);
-                        PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
+                        if (EditorUtility.IsPersistent(outline))
+                        {
+                            EditorUtility.SetDirty(outline);
+                            RequestPrefabAssetBakes();
+                        }
+                        else PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
                     }
 
                     Styles.PingRenderer.text = renderer.name;
@@ -183,6 +204,8 @@ namespace reromanlee.MeshOutline.Editor
                     return Styles.Baking;
                 case PartStatus.BakedInScene:
                     return Styles.BakedInScene;
+                case PartStatus.RuntimeOnly:
+                    return Styles.RuntimeOnly;
                 default:
                     return Styles.Baked;
             }
@@ -192,6 +215,7 @@ namespace reromanlee.MeshOutline.Editor
         {
             if (outline.IsExcluded(renderer)) return PartStatus.Excluded;
             Mesh sourceMesh = ObjectOutline.GetSourceMesh(renderer);
+            if (EditorUtility.IsPersistent(outline) && !OutlineBakeCache.TryGetKey(sourceMesh, out _)) return PartStatus.RuntimeOnly;
             foreach (ObjectOutline.BakedPart part in outline.BakedParts)
             {
                 if (part.renderer != renderer) continue;
@@ -206,7 +230,8 @@ namespace reromanlee.MeshOutline.Editor
             using (new EditorGUILayout.HorizontalScope())
             {
                 EditorGUILayout.LabelField(SummaryText(), EditorStyles.wordWrappedMiniLabel);
-                bool canRebake = targets.Cast<ObjectOutline>().Any(o => !EditorUtility.IsPersistent(o));
+                bool canRebake = targets.Cast<ObjectOutline>()
+                    .Any(o => !EditorUtility.IsPersistent(o) || OutlineBakeValidator.IsEditablePrefabAsset(o));
                 using (new EditorGUI.DisabledScope(!canRebake))
                 {
                     if (GUILayout.Button(Styles.Rebake, EditorStyles.miniButton, GUILayout.Width(60f)))
@@ -221,14 +246,14 @@ namespace reromanlee.MeshOutline.Editor
         {
             if (targets.Length > 1) return $"{targets.Length} outlines selected. Select one to see its parts.";
             var outline = (ObjectOutline)target;
-            if (EditorUtility.IsPersistent(outline))
+            if (EditorUtility.IsPersistent(outline) && !OutlineBakeValidator.IsEditablePrefabAsset(outline))
             {
-                return $"{outline.BakedParts.Count} baked parts. Open the prefab to edit them.";
+                return "This prefab is read-only, so its outline is baked in each scene that uses it.";
             }
 
             bool baking = candidates.Any(r => GetStatus(outline, r) == PartStatus.Baking);
             if (baking) return "Baking...";
-            int parts = outline.Parts.Count;
+            int parts = candidates.Count(r => !outline.IsExcluded(r));
             int cached = outline.BakedParts.Where(p => p.mesh != null && EditorUtility.IsPersistent(p.mesh)).Select(p => p.mesh).Distinct().Count();
             return $"{parts} part{(parts == 1 ? "" : "s")} · {cached} cached mesh{(cached == 1 ? "" : "es")} · up to date";
         }

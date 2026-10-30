@@ -63,12 +63,24 @@ namespace reromanlee.MeshOutline.Editor
         /// <summary>Rebakes an outline's meshes even if they look up to date.</summary>
         internal static void Rebake(ObjectOutline outline) => TryValidate(outline, force: true);
 
+        /// <summary>
+        /// Prefab assets whose outlines can be baked in place: not model prefabs, and not prefabs
+        /// in read-only packages.
+        /// </summary>
+        internal static bool IsEditablePrefabAsset(ObjectOutline outline) =>
+            outline != null && PrefabUtility.IsPartOfPrefabAsset(outline) && !PrefabUtility.IsPartOfImmutablePrefab(outline);
+
         /// <summary>One broken mesh must not stop the rest of the batch from baking.</summary>
         private static void TryValidate(ObjectOutline outline, bool force)
         {
             try
             {
-                Validate(outline, force);
+                bool changed = Validate(outline, force);
+                // Prefab assets aren't saved with a scene: save them like an inspector edit would.
+                if (IsEditablePrefabAsset(outline) && (changed || EditorUtility.IsDirty(outline)))
+                {
+                    PrefabUtility.SavePrefabAsset(outline.transform.root.gameObject);
+                }
             }
             catch (Exception exception)
             {
@@ -77,32 +89,36 @@ namespace reromanlee.MeshOutline.Editor
             }
         }
 
-        private static void Validate(ObjectOutline outline, bool force)
+        /// <summary>Returns whether the outline's baked parts changed.</summary>
+        private static bool Validate(ObjectOutline outline, bool force)
         {
-            if (!ShouldValidate(outline)) return;
+            if (!ShouldValidate(outline)) return false;
+            bool asset = EditorUtility.IsPersistent(outline);
 
             outline.GatherCandidates(candidates, includeExcluded: true);
             IReadOnlyList<BakedPart> current = outline.BakedParts;
             var next = new List<BakedPart>(candidates.Count);
-            bool changed = candidates.Count != current.Count;
-            for (int i = 0; i < candidates.Count; i++)
+            foreach (Renderer renderer in candidates)
             {
-                Renderer renderer = candidates[i];
-                BakedPart existing = Find(current, renderer);
-                BakedPart part = Resolve(outline, renderer, ObjectOutline.GetSourceMesh(renderer), existing, force);
-                next.Add(part);
-                if (!changed && !Same(part, current[i])) changed = true;
+                Mesh sourceMesh = ObjectOutline.GetSourceMesh(renderer);
+                // A prefab asset can only reference assets: a mesh that isn't one is baked in each
+                // scene instance instead, or at runtime.
+                if (asset && !OutlineBakeCache.TryGetKey(sourceMesh, out _)) continue;
+                next.Add(Resolve(outline, renderer, sourceMesh, Find(current, renderer), force));
             }
 
+            bool changed = next.Count != current.Count;
+            for (int i = 0; !changed && i < next.Count; i++) changed = !Same(next[i], current[i]);
             if (!changed)
             {
                 outline.Refresh();
-                return;
+                return false;
             }
 
             outline.SetBakedParts(next);
             EditorUtility.SetDirty(outline);
-            if (PrefabUtility.IsPartOfPrefabInstance(outline)) PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
+            if (!asset && PrefabUtility.IsPartOfPrefabInstance(outline)) PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
+            return true;
         }
 
         private static BakedPart Resolve(ObjectOutline outline, Renderer renderer, Mesh sourceMesh, BakedPart existing, bool force)
@@ -134,7 +150,8 @@ namespace reromanlee.MeshOutline.Editor
 
         private static bool ShouldValidate(ObjectOutline outline)
         {
-            if (outline == null || EditorUtility.IsPersistent(outline)) return false;
+            if (outline == null) return false;
+            if (EditorUtility.IsPersistent(outline)) return IsEditablePrefabAsset(outline);
             var scene = outline.gameObject.scene;
             if (!scene.IsValid()) return false;
             // Leave previews alone (asset thumbnails, scripts using LoadPrefabContents); Prefab
