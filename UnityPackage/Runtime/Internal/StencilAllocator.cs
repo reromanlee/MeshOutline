@@ -55,5 +55,15 @@ namespace reromanlee.MeshOutline
 
         /// <summary>The index-th usable value: 1..15, 17..31, 33..47, ...</summary>
         internal static int ValueAt(int index) => 16 * (index / 15) + index % 15 + 1;
+
+#if UNITY_EDITOR
+        // With domain reload off, statics outlive play sessions: warn again in each one.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetWarning()
+        {
+            warnedOverflow = false;
+            overflowCursor = 0;
+        }
+#endif
     }
 }

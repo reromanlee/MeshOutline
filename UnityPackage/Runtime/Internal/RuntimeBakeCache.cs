@@ -98,5 +98,11 @@ namespace reromanlee.MeshOutline
             if (Application.isPlaying) Object.Destroy(mesh);
             else Object.DestroyImmediate(mesh);
         }
+
+#if UNITY_EDITOR
+        // With domain reload off, statics outlive play sessions: report again in each one.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetReports() => reported.Clear();
+#endif
     }
 }
