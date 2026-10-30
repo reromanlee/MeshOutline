@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace reromanlee.MeshOutline
 {
@@ -56,8 +58,17 @@ namespace reromanlee.MeshOutline
             }
 
             var baked = new Mesh { name = source.name + " (Outline)", hideFlags = HideFlags.HideAndDontSave };
-            OutlineMeshBaker.Bake(source, baked);
-            baked.UploadMeshData(markNoLongerReadable: true);
+            try
+            {
+                OutlineMeshBaker.Bake(source, baked);
+                baked.UploadMeshData(markNoLongerReadable: true);
+            }
+            catch (Exception exception)
+            {
+                DestroyMesh(baked);
+                if (reported.Add(source)) Debug.LogException(exception, context);
+                return null;
+            }
 
             entry = new Entry { Source = source, Baked = baked, Users = 1 };
             bySource[source] = entry;
@@ -74,13 +85,18 @@ namespace reromanlee.MeshOutline
 
             byBaked.Remove(baked);
             bySource.Remove(entry.Source);
-            if (Application.isPlaying) Object.Destroy(baked);
-            else Object.DestroyImmediate(baked);
+            DestroyMesh(baked);
         }
 
         private static void ReportOnce(Mesh source, Object context, string message)
         {
             if (reported.Add(source)) Debug.LogError(message, context);
+        }
+
+        private static void DestroyMesh(Mesh mesh)
+        {
+            if (Application.isPlaying) Object.Destroy(mesh);
+            else Object.DestroyImmediate(mesh);
         }
     }
 }

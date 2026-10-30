@@ -1,8 +1,10 @@
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using BakedPart = reromanlee.MeshOutline.ObjectOutline.BakedPart;
+using Object = UnityEngine.Object;
 
 namespace reromanlee.MeshOutline.Editor
 {
@@ -55,11 +57,25 @@ namespace reromanlee.MeshOutline.Editor
 
             var batch = new List<ObjectOutline>(pending);
             pending.Clear();
-            foreach (ObjectOutline outline in batch) Validate(outline, force: false);
+            foreach (ObjectOutline outline in batch) TryValidate(outline, force: false);
         }
 
         /// <summary>Rebakes an outline's meshes even if they look up to date.</summary>
-        internal static void Rebake(ObjectOutline outline) => Validate(outline, force: true);
+        internal static void Rebake(ObjectOutline outline) => TryValidate(outline, force: true);
+
+        /// <summary>One broken mesh must not stop the rest of the batch from baking.</summary>
+        private static void TryValidate(ObjectOutline outline, bool force)
+        {
+            try
+            {
+                Validate(outline, force);
+            }
+            catch (Exception exception)
+            {
+                // The outline as context: clicking the log selects it.
+                Debug.LogException(exception, outline);
+            }
+        }
 
         private static void Validate(ObjectOutline outline, bool force)
         {

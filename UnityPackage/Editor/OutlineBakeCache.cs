@@ -102,7 +102,15 @@ namespace reromanlee.MeshOutline.Editor
             if (AssetDatabase.LoadMainAssetAtPath(path) != null) path = AssetDatabase.GenerateUniqueAssetPath(path);
 
             var mesh = new Mesh();
-            OutlineMeshBaker.Bake(source, mesh);
+            try
+            {
+                OutlineMeshBaker.Bake(source, mesh);
+            }
+            catch
+            {
+                Object.DestroyImmediate(mesh);
+                throw;
+            }
             AssetDatabase.CreateAsset(mesh, path);
             WriteInfo(path, key, fingerprint);
             PathIndex[key] = path;
@@ -173,8 +181,15 @@ namespace reromanlee.MeshOutline.Editor
             staleKeys.Clear();
             foreach (string key in keys)
             {
-                Mesh source = LoadSource(key);
-                if (source != null) GetOrBake(source, key);
+                try
+                {
+                    Mesh source = LoadSource(key);
+                    if (source != null) GetOrBake(source, key);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
             }
             OutlineBakeValidator.RequestAll();
         }
