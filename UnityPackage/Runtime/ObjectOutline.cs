@@ -107,6 +107,8 @@ namespace reromanlee.MeshOutline
         private static readonly List<ObjectOutline> live = new List<ObjectOutline>();
         private static readonly List<Renderer> rendererBuffer = new List<Renderer>();
         private static readonly List<Renderer> candidateBuffer = new List<Renderer>();
+        private static readonly List<Renderer> lodRendererBuffer = new List<Renderer>();
+        private static readonly List<LODGroup> lodGroupBuffer = new List<LODGroup>();
 
         /// <summary>Outline color. HDR colors glow when bloom is enabled.</summary>
         /// <remarks>A color with a NaN or infinite component is ignored, with an error.</remarks>
@@ -452,37 +454,79 @@ namespace reromanlee.MeshOutline
                 return;
             }
 
-            DetachFromLodGroups();
+            // The groups parts belong in, plus the ones they joined before and may have to leave.
+            lodGroupBuffer.Clear();
+            foreach (LODGroup group in lodGroups)
+            {
+                if (group != null && !lodGroupBuffer.Contains(group)) lodGroupBuffer.Add(group);
+            }
             foreach (OutlinePart part in parts)
             {
                 if (part.Renderer == null || FindLodLevel(part.Source, out LODGroup group) < 0) continue;
-                LOD[] lods = group.GetLODs();
-                for (int level = 0; level < lods.Length; level++)
-                {
-                    Renderer[] renderers = lods[level].renderers;
-                    if (Array.IndexOf(renderers, part.Source) < 0) continue;
-                    Array.Resize(ref renderers, renderers.Length + 1);
-                    renderers[renderers.Length - 1] = part.Renderer;
-                    lods[level].renderers = renderers;
-                }
-                group.SetLODs(lods);
-                if (!lodGroups.Contains(group)) lodGroups.Add(group);
+                if (!lodGroupBuffer.Contains(group)) lodGroupBuffer.Add(group);
             }
+
+            lodGroups.Clear();
+            foreach (LODGroup group in lodGroupBuffer)
+            {
+                if (SyncLodGroup(group, attach: true)) lodGroups.Add(group);
+            }
+            lodGroupBuffer.Clear();
         }
 
         private void DetachFromLodGroups()
         {
             foreach (LODGroup group in lodGroups)
             {
-                if (group == null) continue;
-                LOD[] lods = group.GetLODs();
-                for (int level = 0; level < lods.Length; level++)
-                {
-                    lods[level].renderers = Array.FindAll(lods[level].renderers, r => r != null && !IsOwnPart(r));
-                }
-                group.SetLODs(lods);
+                if (group != null) SyncLodGroup(group, attach: false);
             }
             lodGroups.Clear();
+        }
+
+        /// <summary>
+        /// Puts each part in exactly the levels that list its source (or, to detach, in none) with
+        /// one <c>SetLODs</c> call, skipped when the group already matches. Returns whether any
+        /// part is in the group.
+        /// </summary>
+        private bool SyncLodGroup(LODGroup group, bool attach)
+        {
+            LOD[] lods = group.GetLODs();
+            bool changed = false;
+            bool joined = false;
+            for (int level = 0; level < lods.Length; level++)
+            {
+                Renderer[] current = lods[level].renderers;
+                lodRendererBuffer.Clear();
+                foreach (Renderer renderer in current)
+                {
+                    if (renderer != null && !IsOwnPart(renderer)) lodRendererBuffer.Add(renderer);
+                }
+                if (attach)
+                {
+                    foreach (OutlinePart part in parts)
+                    {
+                        if (part.Renderer == null || Array.IndexOf(current, part.Source) < 0) continue;
+                        lodRendererBuffer.Add(part.Renderer);
+                        joined = true;
+                    }
+                }
+                if (SameRenderers(current, lodRendererBuffer)) continue;
+                lods[level].renderers = lodRendererBuffer.ToArray();
+                changed = true;
+            }
+            if (changed) group.SetLODs(lods);
+            lodRendererBuffer.Clear();
+            return joined;
+        }
+
+        private static bool SameRenderers(Renderer[] current, List<Renderer> next)
+        {
+            if (current.Length != next.Count) return false;
+            for (int i = 0; i < current.Length; i++)
+            {
+                if (!ReferenceEquals(current[i], next[i])) return false;
+            }
+            return true;
         }
 
         private bool IsOwnPart(Renderer renderer) =>
