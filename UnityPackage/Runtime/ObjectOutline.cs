@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
-using UnityEngine.Serialization;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -45,11 +44,11 @@ namespace reromanlee.MeshOutline
         private const float DefaultReferenceDistance = 10f;
         private const float MinReferenceDistance = 0.01f;
 
-        [SerializeField, ColorUsage(true, true), FormerlySerializedAs("outlineColor")]
+        [SerializeField, ColorUsage(true, true)]
         [Tooltip("Outline color. HDR colors glow when bloom is enabled.")]
         private Color color = Color.white;
 
-        [SerializeField, Min(0f), FormerlySerializedAs("outlineWidth")]
+        [SerializeField, Min(0f)]
         [Tooltip("Outline width, in pixels at 1080p (Exact Pixels: in screen pixels).")]
         private float width = DefaultWidth;
 
@@ -86,10 +85,6 @@ namespace reromanlee.MeshOutline
         // Written by the editor. Serialized so builds and prefab instances render without any
         // runtime baking.
         [SerializeField, HideInInspector] private List<BakedPart> bakedParts = new List<BakedPart>();
-
-        // 1.0.0 saved a hidden child object here. It's deleted on load: parts are never saved now.
-        [SerializeField, HideInInspector, FormerlySerializedAs("outlineGameObject")]
-        private GameObject legacyGeneratedObject;
 
         // Runtime state, derived from the fields above and never saved.
         private readonly List<OutlinePart> parts = new List<OutlinePart>();
@@ -267,7 +262,6 @@ namespace reromanlee.MeshOutline
         private void Awake()
         {
             Register();
-            RemoveLegacyObject();
             Build();
         }
 
@@ -638,24 +632,6 @@ namespace reromanlee.MeshOutline
             if (immediate) DestroyImmediate(material);
             else Destroy(material);
             material = null;
-        }
-
-        private void RemoveLegacyObject()
-        {
-            if (legacyGeneratedObject == null) return;
-            GameObject legacy = legacyGeneratedObject;
-            legacyGeneratedObject = null;
-#if UNITY_EDITOR
-            if (!Application.isPlaying)
-            {
-                // Objects that come from a prefab can't be deleted from an instance of it.
-                if (PrefabUtility.IsPartOfPrefabInstance(legacy)) legacy.SetActive(false);
-                else DestroyImmediate(legacy);
-                EditorUtility.SetDirty(this);
-                return;
-            }
-#endif
-            Destroy(legacy);
         }
 
         /// <summary>
