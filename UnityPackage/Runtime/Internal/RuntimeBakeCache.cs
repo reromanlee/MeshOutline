@@ -18,26 +18,40 @@ namespace reromanlee.MeshOutline
 
         private static readonly Dictionary<Mesh, Entry> bySource = new Dictionary<Mesh, Entry>();
         private static readonly Dictionary<Mesh, Entry> byBaked = new Dictionary<Mesh, Entry>();
-        private static readonly HashSet<Mesh> reportedUnreadable = new HashSet<Mesh>();
 
-        /// <summary>Returns a shared outline mesh for <paramref name="source"/>, or null if it can't be read.</summary>
-        internal static Mesh Acquire(Mesh source, Object context)
+        // Meshes that couldn't be baked, so each problem is reported once rather than per outline.
+        private static readonly HashSet<Mesh> reported = new HashSet<Mesh>();
+
+        /// <summary>
+        /// Returns a shared outline mesh for <paramref name="source"/>, the mesh of
+        /// <paramref name="renderer"/>, or null if it can't be baked here.
+        /// </summary>
+        internal static Mesh Acquire(Renderer renderer, Mesh source, Object context)
         {
+            if (source == null) return null;
             if (bySource.TryGetValue(source, out Entry entry) && entry.Baked != null)
             {
                 entry.Users++;
                 return entry.Baked;
             }
 
+            // Static batching swaps the renderer's mesh for the whole batch's, already merged in
+            // world space: the renderer's own mesh is gone.
+            if (renderer.isPartOfStaticBatch)
+            {
+                ReportOnce(source, context,
+                    $"[MeshOutline] '{context.name}' can't outline '{renderer.name}' at runtime: it's static batched, so its own mesh " +
+                    "is no longer available. Add the ObjectOutline in the editor (in the scene or on the prefab) so the outline " +
+                    "is baked ahead of time, or turn off Batching Static on it.");
+                return null;
+            }
+
             if (!source.isReadable)
             {
-                if (reportedUnreadable.Add(source))
-                {
-                    Debug.LogError(
-                        $"[MeshOutline] '{context.name}' can't be outlined at runtime: mesh '{source.name}' isn't readable. " +
-                        "Either enable Read/Write in its import settings, or add the ObjectOutline in the editor " +
-                        "(e.g. on the prefab) so the outline is baked ahead of time.", context);
-                }
+                ReportOnce(source, context,
+                    $"[MeshOutline] '{context.name}' can't be outlined at runtime: mesh '{source.name}' isn't readable. " +
+                    "Either enable Read/Write in its import settings, or add the ObjectOutline in the editor " +
+                    "(e.g. on the prefab) so the outline is baked ahead of time.");
                 return null;
             }
 
@@ -62,6 +76,11 @@ namespace reromanlee.MeshOutline
             bySource.Remove(entry.Source);
             if (Application.isPlaying) Object.Destroy(baked);
             else Object.DestroyImmediate(baked);
+        }
+
+        private static void ReportOnce(Mesh source, Object context, string message)
+        {
+            if (reported.Add(source)) Debug.LogError(message, context);
         }
     }
 }

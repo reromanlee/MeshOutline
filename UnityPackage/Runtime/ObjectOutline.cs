@@ -381,16 +381,15 @@ namespace reromanlee.MeshOutline
             bool missingBakes = false;
             foreach (Renderer source in candidateBuffer)
             {
-                Mesh sourceMesh = GetSourceMesh(source);
-                Mesh baked = FindBakedMesh(source, sourceMesh);
                 OutlinePart part = FindPart(source);
+                Mesh baked = FindBakedMesh(source, part, out Mesh sourceMesh);
 
                 bool upToDate = part != null && part.SourceMesh == sourceMesh && part.Mesh != null &&
                                 (baked != null ? part.Mesh == baked : RuntimeBakeCache.Owns(part.Mesh));
                 if (!upToDate)
                 {
                     Mesh mesh = baked;
-                    if (mesh == null && Application.isPlaying) mesh = RuntimeBakeCache.Acquire(sourceMesh, this);
+                    if (mesh == null && Application.isPlaying) mesh = RuntimeBakeCache.Acquire(source, sourceMesh, this);
                     if (mesh == null)
                     {
                         missingBakes = true;
@@ -494,12 +493,22 @@ namespace reromanlee.MeshOutline
             return -1;
         }
 
-        private Mesh FindBakedMesh(Renderer source, Mesh sourceMesh)
+        /// <summary>
+        /// The baked outline mesh for a source renderer, and the source mesh it stands for. A
+        /// static-batched renderer reports its batch's combined mesh instead of its own, so it's
+        /// matched by renderer alone and keeps the mesh it was baked or built from.
+        /// </summary>
+        private Mesh FindBakedMesh(Renderer source, OutlinePart part, out Mesh sourceMesh)
         {
+            sourceMesh = GetSourceMesh(source);
+            bool staticBatched = source.isPartOfStaticBatch;
             foreach (BakedPart baked in bakedParts)
             {
-                if (baked.renderer == source && baked.sourceMesh == sourceMesh && baked.mesh != null) return baked.mesh;
+                if (baked.renderer != source || baked.mesh == null) continue;
+                if (staticBatched && baked.sourceMesh != null) sourceMesh = baked.sourceMesh;
+                if (baked.sourceMesh == sourceMesh) return baked.mesh;
             }
+            if (staticBatched && part != null && part.SourceMesh != null) sourceMesh = part.SourceMesh;
             return null;
         }
 
