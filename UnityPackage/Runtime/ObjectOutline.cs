@@ -104,7 +104,12 @@ namespace reromanlee.MeshOutline
         // LODGroups this outline added its parts to (play mode only).
         private readonly List<LODGroup> lodGroups = new List<LODGroup>();
 
+#if UNITY_EDITOR
+        // Every loaded outline, for the editor's bake tools and domain reload teardown. Players
+        // never read it, so builds don't pay for keeping it.
         private static readonly List<ObjectOutline> live = new List<ObjectOutline>();
+#endif
+
         private static readonly List<Renderer> rendererBuffer = new List<Renderer>();
         private static readonly List<Renderer> candidateBuffer = new List<Renderer>();
         private static readonly List<Renderer> lodRendererBuffer = new List<Renderer>();
@@ -252,14 +257,14 @@ namespace reromanlee.MeshOutline
 
         private void Awake()
         {
-            if (!live.Contains(this)) live.Add(this);
+            Register();
             RemoveLegacyObject();
             Build();
         }
 
         private void OnEnable()
         {
-            if (!live.Contains(this)) live.Add(this);
+            Register();
             // Awake doesn't run again after a domain reload, which tears everything down.
             if (!built) Build();
             stencilRef = StencilAllocator.Acquire(this);
@@ -281,10 +286,19 @@ namespace reromanlee.MeshOutline
 
         private void OnDestroy()
         {
+#if UNITY_EDITOR
             live.Remove(this);
+#endif
             OutlineTracking.Remove(this);
             StencilAllocator.Release(stencilRef, this);
             TearDown(immediate: !Application.isPlaying);
+        }
+
+        private void Register()
+        {
+#if UNITY_EDITOR
+            if (!live.Contains(this)) live.Add(this);
+#endif
         }
 
         private void UpdateTracking()
@@ -688,7 +702,6 @@ namespace reromanlee.MeshOutline
         private static bool IsFinite(Color value) => IsFinite(value.r) && IsFinite(value.g) && IsFinite(value.b) && IsFinite(value.a);
 
         // Internal accessors for the editor and tests.
-        internal static IReadOnlyList<ObjectOutline> Live => live;
         internal IReadOnlyList<BakedPart> BakedParts => bakedParts;
         internal IReadOnlyList<OutlinePart> BuiltParts => parts;
         internal Material MaskMaterial => maskMaterial;
@@ -703,6 +716,8 @@ namespace reromanlee.MeshOutline
         }
 
 #if UNITY_EDITOR
+        internal static IReadOnlyList<ObjectOutline> Live => live;
+
         [InitializeOnLoadMethod]
         private static void TearDownBeforeDomainReload()
         {
