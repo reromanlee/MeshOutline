@@ -347,6 +347,7 @@ namespace reromanlee.MeshOutline
         {
             DestroyMaterial(ref maskMaterial, immediate: !Application.isPlaying);
             DestroyMaterial(ref fillMaterial, immediate: !Application.isPlaying);
+            OutlineShaders.CheckCustomFill(customFillMaterial, this);
             maskMaterial = CreateMaterial(OutlineShaders.Mask, null, "Outline Mask", OutlineShaders.MaskQueue);
             fillMaterial = CreateMaterial(OutlineShaders.Fill, customFillMaterial, "Outline Fill", OutlineShaders.FillQueue);
             materialsBuiltFrom = customFillMaterial;

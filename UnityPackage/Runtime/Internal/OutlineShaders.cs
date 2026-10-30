@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace reromanlee.MeshOutline
@@ -24,9 +25,29 @@ namespace reromanlee.MeshOutline
 
         private static Shader mask;
         private static Shader fill;
+        private static readonly HashSet<Material> reportedCustomFills = new HashSet<Material>();
 
         internal static Shader Mask => mask != null ? mask : mask = Load(MaskPath);
         internal static Shader Fill => fill != null ? fill : fill = Load(FillPath);
+
+        /// <summary>
+        /// Warns once per material when a custom fill can't follow the stencil and depth
+        /// conventions, which would make its fill cover the object it outlines.
+        /// </summary>
+        internal static void CheckCustomFill(Material material, Object context)
+        {
+            if (material == null || material.shader == null) return;
+            if (material.HasProperty(StencilRefId) && material.HasProperty(ZTestId)) return;
+            if (!reportedCustomFills.Add(material)) return;
+            Debug.LogWarning($"[MeshOutline] Custom fill material '{material.name}' on '{context.name}' has no _StencilRef or _ZTest " +
+                             "property, so its fill draws over the object it outlines. Base its shader on Hidden/MeshOutline/Fill.", context);
+        }
+
+#if UNITY_EDITOR
+        // With domain reload off, statics outlive play sessions: report again in each one.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetReports() => reportedCustomFills.Clear();
+#endif
 
         private static Shader Load(string path)
         {
