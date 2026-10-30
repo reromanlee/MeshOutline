@@ -12,7 +12,7 @@ namespace reromanlee.MeshOutline.Editor
     /// Keeps each outline's baked parts in sync with its renderers: bakes missing or outdated
     /// outline meshes (into the shared cache, or into the scene for source meshes that aren't
     /// assets) and records them on the outline. Requests are batched and run on the next editor
-    /// tick.
+    /// tick. Excluded renderers are baked too, so including them again at runtime costs nothing.
     /// </summary>
     [InitializeOnLoad]
     internal static class OutlineBakeValidator
@@ -81,7 +81,7 @@ namespace reromanlee.MeshOutline.Editor
         {
             if (!ShouldValidate(outline)) return;
 
-            outline.GatherCandidates(candidates, includeExcluded: false);
+            outline.GatherCandidates(candidates, includeExcluded: true);
             IReadOnlyList<BakedPart> current = outline.BakedParts;
             var next = new List<BakedPart>(candidates.Count);
             bool changed = candidates.Count != current.Count;
