@@ -88,7 +88,7 @@ namespace reromanlee.MeshOutline.Editor
             using (new EditorGUILayout.HorizontalScope())
             {
                 EditorGUILayout.Slider(width, 0f, 20f, Styles.Width);
-                GUIContent unit = mixedModes || mode == OutlineWidthMode.Pixels ? Styles.Pixels : Styles.PixelsAt1080p;
+                GUIContent unit = mixedModes || mode == OutlineWidthMode.ExactPixels ? Styles.Pixels : Styles.PixelsAt1080p;
                 GUILayout.Label(unit, EditorStyles.miniLabel, GUILayout.Width(62f));
             }
             if (mixedModes || mode == OutlineWidthMode.ScalesWithDistance)

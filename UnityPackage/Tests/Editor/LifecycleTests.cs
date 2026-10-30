@@ -188,7 +188,7 @@ namespace reromanlee.MeshOutline.Tests
             Assert.AreEqual(8f, outline.FillMaterial.GetFloat(OutlineShaders.WidthId));
             Assert.AreEqual(0f, outline.FillMaterial.GetFloat(OutlineShaders.WidthModeId));
 
-            outline.WidthMode = OutlineWidthMode.Pixels;
+            outline.WidthMode = OutlineWidthMode.ExactPixels;
             Assert.AreEqual(8f, outline.FillMaterial.GetFloat(OutlineShaders.WidthId));
             Assert.AreEqual(1f, outline.FillMaterial.GetFloat(OutlineShaders.WidthModeId));
 
