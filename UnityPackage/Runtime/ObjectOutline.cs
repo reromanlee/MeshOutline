@@ -247,6 +247,9 @@ namespace reromanlee.MeshOutline
             Refresh();
         }
 
+        /// <summary>Whether a renderer was excluded with <see cref="SetExcluded"/> or in the inspector.</summary>
+        public bool IsExcluded(Renderer renderer) => renderer != null && excludedRenderers.Contains(renderer);
+
         /// <summary>
         /// Re-gathers the outlined renderers after the hierarchy changed at runtime (meshes added,
         /// removed, re-parented or swapped), and copies each source renderer's enabled state,
@@ -713,7 +716,6 @@ namespace reromanlee.MeshOutline
         internal Material MaskMaterial => maskMaterial;
         internal Material FillMaterial => fillMaterial;
         internal int StencilRef => stencilRef;
-        internal bool IsExcluded(Renderer renderer) => excludedRenderers.Contains(renderer);
 
         internal void SetBakedParts(List<BakedPart> value)
         {
