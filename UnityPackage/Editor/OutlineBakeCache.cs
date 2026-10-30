@@ -137,7 +137,7 @@ namespace reromanlee.MeshOutline.Editor
             {
                 if (!path.StartsWith(folderPrefix, StringComparison.Ordinal))
                 {
-                    sourceGuids.Add(AssetDatabase.AssetPathToGUID(path));
+                    if (CanContainMeshes(path)) sourceGuids.Add(AssetDatabase.AssetPathToGUID(path));
                 }
                 else if (pathByKey != null)
                 {
@@ -173,6 +173,26 @@ namespace reromanlee.MeshOutline.Editor
         }
 
         private static readonly HashSet<string> staleKeys = new HashSet<string>();
+
+        // Main asset types that never hold a mesh. Skipping them keeps a script edit from
+        // scanning the whole cache on the first import after each domain reload.
+        private static readonly Type[] meshlessTypes =
+        {
+            typeof(MonoScript), typeof(Shader), typeof(ComputeShader), typeof(Material), typeof(Texture),
+            typeof(AudioClip), typeof(TextAsset), typeof(SceneAsset), typeof(Font), typeof(AnimationClip),
+            typeof(DefaultAsset)
+        };
+
+        private static bool CanContainMeshes(string path)
+        {
+            Type type = AssetDatabase.GetMainAssetTypeAtPath(path);
+            if (type == null) return true;
+            foreach (Type meshless in meshlessTypes)
+            {
+                if (meshless.IsAssignableFrom(type)) return false;
+            }
+            return true;
+        }
 
         private static void RebakeStale()
         {
