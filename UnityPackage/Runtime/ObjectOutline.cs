@@ -237,7 +237,13 @@ namespace reromanlee.MeshOutline
             if (renderer == null) throw new ArgumentNullException(nameof(renderer));
             if (excludedRenderers.Contains(renderer) == excluded) return;
             if (excluded) excludedRenderers.Add(renderer);
-            else excludedRenderers.RemoveAll(r => r == renderer);
+            else
+            {
+                for (int i = excludedRenderers.Count - 1; i >= 0; i--)
+                {
+                    if (excludedRenderers[i] == renderer) excludedRenderers.RemoveAt(i);
+                }
+            }
             Refresh();
         }
 
