@@ -14,7 +14,7 @@ namespace reromanlee.MeshOutline
 
         /// <summary>Exact screen pixels, at any resolution and any distance.</summary>
         [InspectorName("Exact Pixels")]
-        Pixels,
+        ExactPixels,
 
         /// <summary>
         /// A fixed thickness in world units, like part of the object: <see cref="ObjectOutline.Width"/>

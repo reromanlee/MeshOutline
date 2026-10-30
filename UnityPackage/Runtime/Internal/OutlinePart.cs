@@ -48,12 +48,7 @@ namespace reromanlee.MeshOutline
             {
                 var skinned = gameObject.AddComponent<SkinnedMeshRenderer>();
                 skinned.sharedMesh = mesh;
-                // Same bones, root and quality as the source, so both deform identically.
-                skinned.bones = skinnedSource.bones;
-                skinned.rootBone = skinnedSource.rootBone;
-                skinned.quality = skinnedSource.quality;
-                skinned.updateWhenOffscreen = skinnedSource.updateWhenOffscreen;
-                skinned.localBounds = skinnedSource.localBounds;
+                CopySkinning(skinnedSource, skinned);
                 skinned.skinnedMotionVectors = false;
                 renderer = skinned;
             }
@@ -64,6 +59,8 @@ namespace reromanlee.MeshOutline
                 renderer = gameObject.AddComponent<MeshRenderer>();
             }
 
+            // Hidden until the outline syncs it: the outline may be disabled.
+            renderer.enabled = false;
             // A purely visual overlay: opt out of everything that costs performance.
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
@@ -80,8 +77,43 @@ namespace reromanlee.MeshOutline
         {
             SourceMesh = sourceMesh;
             Mesh = mesh;
-            if (Renderer is SkinnedMeshRenderer skinned) skinned.sharedMesh = mesh;
+            if (Renderer is SkinnedMeshRenderer skinned)
+            {
+                skinned.sharedMesh = mesh;
+                // A swapped skinned mesh (e.g. new equipment) usually comes with its own bones.
+                SyncSkinning();
+            }
             else filter.sharedMesh = mesh;
+        }
+
+        /// <summary>
+        /// Re-copies a skinned source's bones, root bone, quality and bounds, e.g. after equipment
+        /// was re-bound to another skeleton. Bones are only reassigned when they changed.
+        /// </summary>
+        internal void SyncSkinning()
+        {
+            if (Source is SkinnedMeshRenderer source && Renderer is SkinnedMeshRenderer skinned) CopySkinning(source, skinned);
+        }
+
+        /// <summary>Same bones, root and quality as the source, so both deform identically.</summary>
+        private static void CopySkinning(SkinnedMeshRenderer source, SkinnedMeshRenderer target)
+        {
+            Transform[] bones = source.bones;
+            if (!SameBones(bones, target.bones)) target.bones = bones;
+            target.rootBone = source.rootBone;
+            target.quality = source.quality;
+            target.updateWhenOffscreen = source.updateWhenOffscreen;
+            target.localBounds = source.localBounds;
+        }
+
+        private static bool SameBones(Transform[] a, Transform[] b)
+        {
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (!ReferenceEquals(a[i], b[i])) return false;
+            }
+            return true;
         }
 
         /// <summary>Copies the source's layer, rendering layers, enabled state and blend-shape weights.</summary>
@@ -94,7 +126,9 @@ namespace reromanlee.MeshOutline
 
             if (Source is SkinnedMeshRenderer skinnedSource && Renderer is SkinnedMeshRenderer skinned && Mesh != null)
             {
-                int count = Mesh.blendShapeCount;
+                // The source's mesh may have been swapped since the last Refresh: stay in range.
+                Mesh sourceMesh = skinnedSource.sharedMesh;
+                int count = sourceMesh != null ? Mathf.Min(Mesh.blendShapeCount, sourceMesh.blendShapeCount) : 0;
                 for (int i = 0; i < count; i++) skinned.SetBlendShapeWeight(i, skinnedSource.GetBlendShapeWeight(i));
             }
         }

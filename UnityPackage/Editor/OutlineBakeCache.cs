@@ -92,6 +92,22 @@ namespace reromanlee.MeshOutline.Editor
             return baked;
         }
 
+        /// <summary>
+        /// The cached outline mesh for a source mesh asset if it exists and is up to date. Never
+        /// bakes or writes anything, so it's safe during a build.
+        /// </summary>
+        internal static Mesh FindUpToDate(Mesh source, string key)
+        {
+            if (verified.TryGetValue(key, out Mesh known) && known != null) return known;
+            string path = FindPath(key);
+            Mesh baked = path != null ? AssetDatabase.LoadAssetAtPath<Mesh>(path) : null;
+            if (baked == null) return null;
+            EntryInfo info = ReadInfo(path);
+            if (info.version != OutlineMeshBaker.FormatVersion || info.fingerprint != OutlineMeshBaker.Fingerprint(source).ToString()) return null;
+            verified[key] = baked;
+            return baked;
+        }
+
         private static Mesh Create(Mesh source, string key, string fingerprint)
         {
             string folder = Folder;
@@ -102,7 +118,15 @@ namespace reromanlee.MeshOutline.Editor
             if (AssetDatabase.LoadMainAssetAtPath(path) != null) path = AssetDatabase.GenerateUniqueAssetPath(path);
 
             var mesh = new Mesh();
-            OutlineMeshBaker.Bake(source, mesh);
+            try
+            {
+                OutlineMeshBaker.Bake(source, mesh);
+            }
+            catch
+            {
+                Object.DestroyImmediate(mesh);
+                throw;
+            }
             AssetDatabase.CreateAsset(mesh, path);
             WriteInfo(path, key, fingerprint);
             PathIndex[key] = path;
@@ -129,7 +153,7 @@ namespace reromanlee.MeshOutline.Editor
             {
                 if (!path.StartsWith(folderPrefix, StringComparison.Ordinal))
                 {
-                    sourceGuids.Add(AssetDatabase.AssetPathToGUID(path));
+                    if (CanContainMeshes(path)) sourceGuids.Add(AssetDatabase.AssetPathToGUID(path));
                 }
                 else if (pathByKey != null)
                 {
@@ -166,6 +190,26 @@ namespace reromanlee.MeshOutline.Editor
 
         private static readonly HashSet<string> staleKeys = new HashSet<string>();
 
+        // Main asset types that never hold a mesh. Skipping them keeps a script edit from
+        // scanning the whole cache on the first import after each domain reload.
+        private static readonly Type[] meshlessTypes =
+        {
+            typeof(MonoScript), typeof(Shader), typeof(ComputeShader), typeof(Material), typeof(Texture),
+            typeof(AudioClip), typeof(TextAsset), typeof(SceneAsset), typeof(Font), typeof(AnimationClip),
+            typeof(DefaultAsset)
+        };
+
+        private static bool CanContainMeshes(string path)
+        {
+            Type type = AssetDatabase.GetMainAssetTypeAtPath(path);
+            if (type == null) return true;
+            foreach (Type meshless in meshlessTypes)
+            {
+                if (meshless.IsAssignableFrom(type)) return false;
+            }
+            return true;
+        }
+
         private static void RebakeStale()
         {
             EditorApplication.update -= RebakeStale;
@@ -173,8 +217,15 @@ namespace reromanlee.MeshOutline.Editor
             staleKeys.Clear();
             foreach (string key in keys)
             {
-                Mesh source = LoadSource(key);
-                if (source != null) GetOrBake(source, key);
+                try
+                {
+                    Mesh source = LoadSource(key);
+                    if (source != null) GetOrBake(source, key);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
             }
             OutlineBakeValidator.RequestAll();
         }

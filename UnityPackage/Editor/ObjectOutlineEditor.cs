@@ -18,7 +18,8 @@ namespace reromanlee.MeshOutline.Editor
             Excluded,
             Baking,
             Baked,
-            BakedInScene
+            BakedInScene,
+            RuntimeOnly
         }
 
         private static class Styles
@@ -35,6 +36,15 @@ namespace reromanlee.MeshOutline.Editor
             public static readonly GUIContent Advanced = new GUIContent("Advanced");
             public static readonly GUIContent LodHidden = new GUIContent("baked · LOD 1+",
                 "Outlined at runtime, whenever its LOD level is showing. Edit mode only outlines LOD0.");
+            public static readonly GUIContent Excluded = new GUIContent("excluded");
+            public static readonly GUIContent Baking = new GUIContent("baking...", "Baked on the next editor update.");
+            public static readonly GUIContent BakedInScene = new GUIContent("baked (scene)",
+                "Its mesh isn't an asset (e.g. ProBuilder), so the outline mesh is stored in the scene; it's rebaked when the mesh changes.");
+            public static readonly GUIContent Baked = new GUIContent("baked",
+                "Uses the shared outline mesh cache (Project Settings > Mesh Outline).");
+            public static readonly GUIContent RuntimeOnly = new GUIContent("not in prefab",
+                "Its mesh isn't an asset, so a prefab can't store its outline mesh. Instances in a scene bake it into the scene; instances spawned at runtime bake it on the spot, which needs Read/Write.");
+            public static readonly GUIContent PingRenderer = new GUIContent(string.Empty, "Click to highlight the renderer.");
 
             public static readonly GUIStyle Status = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
             public static readonly GUIStyle Dimmed = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
@@ -69,6 +79,19 @@ namespace reromanlee.MeshOutline.Editor
             includeChildren = serializedObject.FindProperty("includeChildren");
             customFillMaterial = serializedObject.FindProperty("customFillMaterial");
             trackSourceEveryFrame = serializedObject.FindProperty("trackSourceEveryFrame");
+            RequestPrefabAssetBakes();
+        }
+
+        /// <summary>
+        /// Prefab assets never load into a scene, so nothing else bakes their outlines: bake them
+        /// when they're shown or edited here, and save them like any inspector edit.
+        /// </summary>
+        private void RequestPrefabAssetBakes()
+        {
+            foreach (Object t in targets)
+            {
+                if (t is ObjectOutline outline && OutlineBakeValidator.IsEditablePrefabAsset(outline)) OutlineBakeValidator.Request(outline);
+            }
         }
 
         public override void OnInspectorGUI()
@@ -81,7 +104,7 @@ namespace reromanlee.MeshOutline.Editor
             using (new EditorGUILayout.HorizontalScope())
             {
                 EditorGUILayout.Slider(width, 0f, 20f, Styles.Width);
-                GUIContent unit = mixedModes || mode == OutlineWidthMode.Pixels ? Styles.Pixels : Styles.PixelsAt1080p;
+                GUIContent unit = mixedModes || mode == OutlineWidthMode.ExactPixels ? Styles.Pixels : Styles.PixelsAt1080p;
                 GUILayout.Label(unit, EditorStyles.miniLabel, GUILayout.Width(62f));
             }
             if (mixedModes || mode == OutlineWidthMode.ScalesWithDistance)
@@ -94,7 +117,7 @@ namespace reromanlee.MeshOutline.Editor
             }
             EditorGUILayout.PropertyField(occlusion);
             EditorGUILayout.PropertyField(includeChildren);
-            serializedObject.ApplyModifiedProperties();
+            if (serializedObject.ApplyModifiedProperties()) RequestPrefabAssetBakes();
 
             EditorGUILayout.Space();
             if (targets.Length == 1) DrawParts((ObjectOutline)target);
@@ -110,7 +133,7 @@ namespace reromanlee.MeshOutline.Editor
                     EditorGUILayout.PropertyField(trackSourceEveryFrame);
                 }
             }
-            serializedObject.ApplyModifiedProperties();
+            if (serializedObject.ApplyModifiedProperties()) RequestPrefabAssetBakes();
 
             EditorGUILayout.Space();
             DrawSummary();
@@ -143,10 +166,16 @@ namespace reromanlee.MeshOutline.Editor
                     {
                         Undo.RecordObject(outline, include ? "Include Renderer in Outline" : "Exclude Renderer from Outline");
                         outline.SetExcluded(renderer, !include);
-                        PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
+                        if (EditorUtility.IsPersistent(outline))
+                        {
+                            EditorUtility.SetDirty(outline);
+                            RequestPrefabAssetBakes();
+                        }
+                        else PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
                     }
 
-                    if (GUILayout.Button(new GUIContent(renderer.name, "Click to highlight the renderer."), EditorStyles.label, GUILayout.MinWidth(40f)))
+                    Styles.PingRenderer.text = renderer.name;
+                    if (GUILayout.Button(Styles.PingRenderer, EditorStyles.label, GUILayout.MinWidth(40f)))
                     {
                         EditorGUIUtility.PingObject(renderer);
                     }
@@ -162,20 +191,23 @@ namespace reromanlee.MeshOutline.Editor
             PartStatus status = GetStatus(outline, renderer);
             if (status == PartStatus.Baked || status == PartStatus.BakedInScene)
             {
-                OutlinePart part = outline.BuiltParts.FirstOrDefault(p => p.Source == renderer);
-                if (part != null && part.HiddenByLod) return Styles.LodHidden;
+                foreach (OutlinePart part in outline.BuiltParts)
+                {
+                    if (part.Source == renderer && part.HiddenByLod) return Styles.LodHidden;
+                }
             }
             switch (status)
             {
                 case PartStatus.Excluded:
-                    return new GUIContent("excluded");
+                    return Styles.Excluded;
                 case PartStatus.Baking:
-                    return new GUIContent("baking...", "Baked on the next editor update.");
+                    return Styles.Baking;
                 case PartStatus.BakedInScene:
-                    return new GUIContent("baked (scene)",
-                        "Its mesh isn't an asset (e.g. ProBuilder), so the outline mesh is stored in the scene; it's rebaked when the mesh changes.");
+                    return Styles.BakedInScene;
+                case PartStatus.RuntimeOnly:
+                    return Styles.RuntimeOnly;
                 default:
-                    return new GUIContent("baked", "Uses the shared outline mesh cache (Project Settings > Mesh Outline).");
+                    return Styles.Baked;
             }
         }
 
@@ -183,6 +215,7 @@ namespace reromanlee.MeshOutline.Editor
         {
             if (outline.IsExcluded(renderer)) return PartStatus.Excluded;
             Mesh sourceMesh = ObjectOutline.GetSourceMesh(renderer);
+            if (EditorUtility.IsPersistent(outline) && !OutlineBakeCache.TryGetKey(sourceMesh, out _)) return PartStatus.RuntimeOnly;
             foreach (ObjectOutline.BakedPart part in outline.BakedParts)
             {
                 if (part.renderer != renderer) continue;
@@ -197,7 +230,8 @@ namespace reromanlee.MeshOutline.Editor
             using (new EditorGUILayout.HorizontalScope())
             {
                 EditorGUILayout.LabelField(SummaryText(), EditorStyles.wordWrappedMiniLabel);
-                bool canRebake = targets.Cast<ObjectOutline>().Any(o => !EditorUtility.IsPersistent(o));
+                bool canRebake = targets.Cast<ObjectOutline>()
+                    .Any(o => !EditorUtility.IsPersistent(o) || OutlineBakeValidator.IsEditablePrefabAsset(o));
                 using (new EditorGUI.DisabledScope(!canRebake))
                 {
                     if (GUILayout.Button(Styles.Rebake, EditorStyles.miniButton, GUILayout.Width(60f)))
@@ -212,14 +246,14 @@ namespace reromanlee.MeshOutline.Editor
         {
             if (targets.Length > 1) return $"{targets.Length} outlines selected. Select one to see its parts.";
             var outline = (ObjectOutline)target;
-            if (EditorUtility.IsPersistent(outline))
+            if (EditorUtility.IsPersistent(outline) && !OutlineBakeValidator.IsEditablePrefabAsset(outline))
             {
-                return $"{outline.BakedParts.Count} baked parts. Open the prefab to edit them.";
+                return "This prefab is read-only, so its outline is baked in each scene that uses it.";
             }
 
             bool baking = candidates.Any(r => GetStatus(outline, r) == PartStatus.Baking);
             if (baking) return "Baking...";
-            int parts = outline.Parts.Count;
+            int parts = candidates.Count(r => !outline.IsExcluded(r));
             int cached = outline.BakedParts.Where(p => p.mesh != null && EditorUtility.IsPersistent(p.mesh)).Select(p => p.mesh).Distinct().Count();
             return $"{parts} part{(parts == 1 ? "" : "s")} · {cached} cached mesh{(cached == 1 ? "" : "es")} · up to date";
         }

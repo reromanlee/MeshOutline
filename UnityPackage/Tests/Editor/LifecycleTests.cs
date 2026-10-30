@@ -188,7 +188,7 @@ namespace reromanlee.MeshOutline.Tests
             Assert.AreEqual(8f, outline.FillMaterial.GetFloat(OutlineShaders.WidthId));
             Assert.AreEqual(0f, outline.FillMaterial.GetFloat(OutlineShaders.WidthModeId));
 
-            outline.WidthMode = OutlineWidthMode.Pixels;
+            outline.WidthMode = OutlineWidthMode.ExactPixels;
             Assert.AreEqual(8f, outline.FillMaterial.GetFloat(OutlineShaders.WidthId));
             Assert.AreEqual(1f, outline.FillMaterial.GetFloat(OutlineShaders.WidthModeId));
 
@@ -232,23 +232,6 @@ namespace reromanlee.MeshOutline.Tests
             go.GetComponent<Renderer>().enabled = false;
             outline.Refresh();
             Assert.IsFalse(part.Renderer.enabled);
-        }
-
-        [Test]
-        public void LegacyGeneratedChild_IsDeletedOnLoad()
-        {
-            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            go.SetActive(false);
-            var outline = go.AddComponent<ObjectOutline>();
-            var legacy = new GameObject("Outline (generated)") { hideFlags = HideFlags.HideInHierarchy };
-            legacy.transform.SetParent(go.transform, false);
-            var serialized = new SerializedObject(outline);
-            serialized.FindProperty("legacyGeneratedObject").objectReferenceValue = legacy;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-
-            go.SetActive(true); // Awake
-
-            Assert.IsTrue(legacy == null);
         }
     }
 }

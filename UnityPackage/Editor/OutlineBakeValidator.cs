@@ -1,8 +1,10 @@
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using BakedPart = reromanlee.MeshOutline.ObjectOutline.BakedPart;
+using Object = UnityEngine.Object;
 
 namespace reromanlee.MeshOutline.Editor
 {
@@ -10,7 +12,7 @@ namespace reromanlee.MeshOutline.Editor
     /// Keeps each outline's baked parts in sync with its renderers: bakes missing or outdated
     /// outline meshes (into the shared cache, or into the scene for source meshes that aren't
     /// assets) and records them on the outline. Requests are batched and run on the next editor
-    /// tick.
+    /// tick. Excluded renderers are baked too, so including them again at runtime costs nothing.
     /// </summary>
     [InitializeOnLoad]
     internal static class OutlineBakeValidator
@@ -55,38 +57,139 @@ namespace reromanlee.MeshOutline.Editor
 
             var batch = new List<ObjectOutline>(pending);
             pending.Clear();
-            foreach (ObjectOutline outline in batch) Validate(outline, force: false);
+            foreach (ObjectOutline outline in batch) TryValidate(outline, force: false);
         }
 
         /// <summary>Rebakes an outline's meshes even if they look up to date.</summary>
-        internal static void Rebake(ObjectOutline outline) => Validate(outline, force: true);
+        internal static void Rebake(ObjectOutline outline) => TryValidate(outline, force: true);
 
-        private static void Validate(ObjectOutline outline, bool force)
+        /// <summary>
+        /// Prefab assets whose outlines can be baked in place: not model prefabs, and not prefabs
+        /// in read-only packages.
+        /// </summary>
+        internal static bool IsEditablePrefabAsset(ObjectOutline outline) =>
+            outline != null && PrefabUtility.IsPartOfPrefabAsset(outline) && !PrefabUtility.IsPartOfImmutablePrefab(outline);
+
+        /// <summary>
+        /// Bakes the outlines on every prefab asset under <paramref name="folders"/> and saves the
+        /// prefabs that changed. Returns how many prefabs were saved.
+        /// </summary>
+        internal static int BakePrefabs(string[] folders)
         {
-            if (!ShouldValidate(outline)) return;
+            string[] guids = AssetDatabase.FindAssets("t:Prefab", folders);
+            int saved = 0;
+            try
+            {
+                for (int i = 0; i < guids.Length; i++)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                    if (EditorUtility.DisplayCancelableProgressBar("Mesh Outline", $"Baking outlines: {path}", (float)i / guids.Length)) break;
+                    var root = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                    if (root == null) continue;
 
-            outline.GatherCandidates(candidates, includeExcluded: false);
+                    bool changed = false;
+                    foreach (ObjectOutline outline in root.GetComponentsInChildren<ObjectOutline>(true))
+                    {
+                        try
+                        {
+                            changed |= Validate(outline, force: false);
+                        }
+                        catch (Exception exception)
+                        {
+                            Debug.LogException(exception, outline);
+                        }
+                    }
+                    if (!changed) continue;
+                    PrefabUtility.SavePrefabAsset(root);
+                    saved++;
+                }
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+            return saved;
+        }
+
+        /// <summary>
+        /// For builds: gives every part without an up-to-date bake one, reusing a valid cache entry
+        /// or else baking into the scene being built, and never writes an asset. Describes each
+        /// part it baked in <paramref name="baked"/>.
+        /// </summary>
+        internal static void BakeMissingForBuild(ObjectOutline outline, List<string> baked)
+        {
+            outline.GatherCandidates(candidates, includeExcluded: true);
+            IReadOnlyList<BakedPart> current = outline.BakedParts;
+            List<BakedPart> next = null;
+            foreach (Renderer renderer in candidates)
+            {
+                // Static batching has already swapped its mesh: there's nothing left to bake from.
+                if (renderer.isPartOfStaticBatch) continue;
+                Mesh sourceMesh = ObjectOutline.GetSourceMesh(renderer);
+                if (IsUpToDate(Find(current, renderer), sourceMesh)) continue;
+
+                Mesh cached = OutlineBakeCache.TryGetKey(sourceMesh, out string key) ? OutlineBakeCache.FindUpToDate(sourceMesh, key) : null;
+                BakedPart part = cached != null
+                    ? new BakedPart { renderer = renderer, sourceMesh = sourceMesh, mesh = cached }
+                    : BakeIntoScene(renderer, sourceMesh);
+
+                if (next == null) next = new List<BakedPart>(current);
+                next.RemoveAll(p => p.renderer == renderer);
+                next.Add(part);
+                baked.Add($"{PathOf(renderer.transform)} (mesh '{sourceMesh.name}')");
+            }
+            if (next != null) outline.SetBakedParts(next);
+        }
+
+        /// <summary>One broken mesh must not stop the rest of the batch from baking.</summary>
+        private static void TryValidate(ObjectOutline outline, bool force)
+        {
+            try
+            {
+                bool changed = Validate(outline, force);
+                // Prefab assets aren't saved with a scene: save them like an inspector edit would.
+                if (IsEditablePrefabAsset(outline) && (changed || EditorUtility.IsDirty(outline)))
+                {
+                    PrefabUtility.SavePrefabAsset(outline.transform.root.gameObject);
+                }
+            }
+            catch (Exception exception)
+            {
+                // The outline as context: clicking the log selects it.
+                Debug.LogException(exception, outline);
+            }
+        }
+
+        /// <summary>Returns whether the outline's baked parts changed.</summary>
+        private static bool Validate(ObjectOutline outline, bool force)
+        {
+            if (!ShouldValidate(outline)) return false;
+            bool asset = EditorUtility.IsPersistent(outline);
+
+            outline.GatherCandidates(candidates, includeExcluded: true);
             IReadOnlyList<BakedPart> current = outline.BakedParts;
             var next = new List<BakedPart>(candidates.Count);
-            bool changed = candidates.Count != current.Count;
-            for (int i = 0; i < candidates.Count; i++)
+            foreach (Renderer renderer in candidates)
             {
-                Renderer renderer = candidates[i];
-                BakedPart existing = Find(current, renderer);
-                BakedPart part = Resolve(outline, renderer, ObjectOutline.GetSourceMesh(renderer), existing, force);
-                next.Add(part);
-                if (!changed && !Same(part, current[i])) changed = true;
+                Mesh sourceMesh = ObjectOutline.GetSourceMesh(renderer);
+                // A prefab asset can only reference assets: a mesh that isn't one is baked in each
+                // scene instance instead, or at runtime.
+                if (asset && !OutlineBakeCache.TryGetKey(sourceMesh, out _)) continue;
+                next.Add(Resolve(outline, renderer, sourceMesh, Find(current, renderer), force));
             }
 
+            bool changed = next.Count != current.Count;
+            for (int i = 0; !changed && i < next.Count; i++) changed = !Same(next[i], current[i]);
             if (!changed)
             {
                 outline.Refresh();
-                return;
+                return false;
             }
 
             outline.SetBakedParts(next);
             EditorUtility.SetDirty(outline);
-            if (PrefabUtility.IsPartOfPrefabInstance(outline)) PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
+            if (!asset && PrefabUtility.IsPartOfPrefabInstance(outline)) PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
+            return true;
         }
 
         private static BakedPart Resolve(ObjectOutline outline, Renderer renderer, Mesh sourceMesh, BakedPart existing, bool force)
@@ -103,22 +206,39 @@ namespace reromanlee.MeshOutline.Editor
 
             // The source mesh isn't an asset (procedural, ProBuilder...): store the bake in the
             // scene. A fingerprint catches the source being edited in place.
-            string hash = OutlineMeshBaker.Fingerprint(sourceMesh).ToString();
-            if (!force && existing.mesh != null && existing.sourceMesh == sourceMesh && existing.sourceHash == hash &&
-                !EditorUtility.IsPersistent(existing.mesh))
-            {
-                return existing;
-            }
+            if (!force && IsUpToDate(existing, sourceMesh) && !EditorUtility.IsPersistent(existing.mesh)) return existing;
+            BakedPart part = BakeIntoScene(renderer, sourceMesh);
+            DestroyIfUnused(existing.mesh, outline);
+            return part;
+        }
 
+        private static BakedPart BakeIntoScene(Renderer renderer, Mesh sourceMesh)
+        {
             var mesh = new Mesh { name = sourceMesh.name + " (Outline)" };
             OutlineMeshBaker.Bake(sourceMesh, mesh);
-            DestroyIfUnused(existing.mesh, outline);
-            return new BakedPart { renderer = renderer, sourceMesh = sourceMesh, mesh = mesh, sourceHash = hash };
+            return new BakedPart
+            {
+                renderer = renderer,
+                sourceMesh = sourceMesh,
+                mesh = mesh,
+                sourceHash = OutlineMeshBaker.Fingerprint(sourceMesh).ToString()
+            };
+        }
+
+        /// <summary>
+        /// Whether a part's bake matches its source. Cached bakes are kept fresh on import;
+        /// scene-stored ones carry a fingerprint of the source they were baked from.
+        /// </summary>
+        private static bool IsUpToDate(BakedPart part, Mesh sourceMesh)
+        {
+            if (part.mesh == null || part.sourceMesh != sourceMesh) return false;
+            return EditorUtility.IsPersistent(part.mesh) || part.sourceHash == OutlineMeshBaker.Fingerprint(sourceMesh).ToString();
         }
 
         private static bool ShouldValidate(ObjectOutline outline)
         {
-            if (outline == null || EditorUtility.IsPersistent(outline)) return false;
+            if (outline == null) return false;
+            if (EditorUtility.IsPersistent(outline)) return IsEditablePrefabAsset(outline);
             var scene = outline.gameObject.scene;
             if (!scene.IsValid()) return false;
             // Leave previews alone (asset thumbnails, scripts using LoadPrefabContents); Prefab
@@ -138,6 +258,13 @@ namespace reromanlee.MeshOutline.Editor
         private static bool Same(BakedPart a, BakedPart b) =>
             a.renderer == b.renderer && a.sourceMesh == b.sourceMesh && a.mesh == b.mesh &&
             (a.sourceHash ?? string.Empty) == (b.sourceHash ?? string.Empty);
+
+        private static string PathOf(Transform transform)
+        {
+            string path = transform.name;
+            for (Transform parent = transform.parent; parent != null; parent = parent.parent) path = parent.name + "/" + path;
+            return path;
+        }
 
         /// <summary>Destroys a replaced scene-stored bake unless another outline still uses it.</summary>
         private static void DestroyIfUnused(Mesh mesh, ObjectOutline owner)

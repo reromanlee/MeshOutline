@@ -19,7 +19,16 @@ namespace reromanlee.MeshOutline.Editor
             Debug.Log($"[MeshOutline] Rebaked {rebaked} outline meshes.{orphans}");
         }
 
-        [MenuItem(MenuRoot + "Clean Up Unused Baked Meshes...", priority = 2)]
+        [MenuItem(MenuRoot + "Bake All Prefabs", priority = 2)]
+        private static void BakeAllPrefabsMenu()
+        {
+            int updated = OutlineBaking.BakeAllPrefabs();
+            Debug.Log(updated > 0
+                ? $"[MeshOutline] Baked the outlines of {updated} prefab(s)."
+                : "[MeshOutline] Every prefab's outline was already baked.");
+        }
+
+        [MenuItem(MenuRoot + "Clean Up Unused Baked Meshes...", priority = 3)]
         private static void CleanUpMenu() => CleanUpWithConfirmation();
 
         [MenuItem(MenuRoot + "Settings...", priority = 20)]

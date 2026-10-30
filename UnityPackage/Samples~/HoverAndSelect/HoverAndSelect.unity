@@ -443,7 +443,6 @@ MonoBehaviour:
   customFillMaterial: {fileID: 0}
   trackSourceEveryFrame: 0
   bakedParts: []
-  legacyGeneratedObject: {fileID: 0}
 --- !u!23 &810453701
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -753,7 +752,6 @@ MonoBehaviour:
   customFillMaterial: {fileID: 0}
   trackSourceEveryFrame: 0
   bakedParts: []
-  legacyGeneratedObject: {fileID: 0}
 --- !u!65 &1031713028
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -917,7 +915,6 @@ MonoBehaviour:
   customFillMaterial: {fileID: 0}
   trackSourceEveryFrame: 0
   bakedParts: []
-  legacyGeneratedObject: {fileID: 0}
 --- !u!23 &1457727083
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1152,7 +1149,6 @@ MonoBehaviour:
   customFillMaterial: {fileID: 0}
   trackSourceEveryFrame: 0
   bakedParts: []
-  legacyGeneratedObject: {fileID: 0}
 --- !u!23 &1552668492
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1362,7 +1358,6 @@ MonoBehaviour:
   customFillMaterial: {fileID: 0}
   trackSourceEveryFrame: 0
   bakedParts: []
-  legacyGeneratedObject: {fileID: 0}
 --- !u!23 &1726303259
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1490,7 +1485,6 @@ MonoBehaviour:
   customFillMaterial: {fileID: 0}
   trackSourceEveryFrame: 0
   bakedParts: []
-  legacyGeneratedObject: {fileID: 0}
 --- !u!136 &1980816183
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -1884,7 +1878,6 @@ MonoBehaviour:
   customFillMaterial: {fileID: 0}
   trackSourceEveryFrame: 0
   bakedParts: []
-  legacyGeneratedObject: {fileID: 0}
 --- !u!135 &2143343359
 SphereCollider:
   m_ObjectHideFlags: 0

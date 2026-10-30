@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
-using UnityEngine.Serialization;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -41,13 +40,17 @@ namespace reromanlee.MeshOutline
             public string sourceHash;
         }
 
-        [SerializeField, ColorUsage(true, true), FormerlySerializedAs("outlineColor")]
+        private const float DefaultWidth = 4f;
+        private const float DefaultReferenceDistance = 10f;
+        private const float MinReferenceDistance = 0.01f;
+
+        [SerializeField, ColorUsage(true, true)]
         [Tooltip("Outline color. HDR colors glow when bloom is enabled.")]
         private Color color = Color.white;
 
-        [SerializeField, Min(0f), FormerlySerializedAs("outlineWidth")]
+        [SerializeField, Min(0f)]
         [Tooltip("Outline width, in pixels at 1080p (Exact Pixels: in screen pixels).")]
-        private float width = 4f;
+        private float width = DefaultWidth;
 
         [SerializeField]
         [Tooltip("Pixels at 1080p: the same share of the screen at any resolution, the same thickness at any distance.\n" +
@@ -55,9 +58,9 @@ namespace reromanlee.MeshOutline
                  "Scales with Distance: like part of the object; Width pixels (at 1080p, 60° field of view) at Reference Distance, thinner farther away, thicker up close.")]
         private OutlineWidthMode widthMode = OutlineWidthMode.PixelsAt1080p;
 
-        [SerializeField, Min(0.01f)]
+        [SerializeField, Min(MinReferenceDistance)]
         [Tooltip("Scales with Distance: the distance, in meters, at which the outline is Width pixels thick (at 1080p with a 60° field of view).")]
-        private float referenceDistance = 10f;
+        private float referenceDistance = DefaultReferenceDistance;
 
         [SerializeField]
         [Tooltip("Normal: hidden behind other geometry, like any object. X-Ray: always visible, even through walls.")]
@@ -83,10 +86,6 @@ namespace reromanlee.MeshOutline
         // runtime baking.
         [SerializeField, HideInInspector] private List<BakedPart> bakedParts = new List<BakedPart>();
 
-        // 1.0.0 saved a hidden child object here. It's deleted on load: parts are never saved now.
-        [SerializeField, HideInInspector, FormerlySerializedAs("outlineGameObject")]
-        private GameObject legacyGeneratedObject;
-
         // Runtime state, derived from the fields above and never saved.
         private readonly List<OutlinePart> parts = new List<OutlinePart>();
         private readonly List<Renderer> partSources = new List<Renderer>();
@@ -100,29 +99,40 @@ namespace reromanlee.MeshOutline
         // LODGroups this outline added its parts to (play mode only).
         private readonly List<LODGroup> lodGroups = new List<LODGroup>();
 
+#if UNITY_EDITOR
+        // Every loaded outline, for the editor's bake tools and domain reload teardown. Players
+        // never read it, so builds don't pay for keeping it.
         private static readonly List<ObjectOutline> live = new List<ObjectOutline>();
+#endif
+
         private static readonly List<Renderer> rendererBuffer = new List<Renderer>();
         private static readonly List<Renderer> candidateBuffer = new List<Renderer>();
+        private static readonly List<Renderer> lodRendererBuffer = new List<Renderer>();
+        private static readonly List<LODGroup> lodGroupBuffer = new List<LODGroup>();
 
         /// <summary>Outline color. HDR colors glow when bloom is enabled.</summary>
+        /// <remarks>A color with a NaN or infinite component is ignored, with an error.</remarks>
         public Color Color
         {
             get => color;
             set
             {
+                if (!IsFinite(value, nameof(Color))) return;
                 color = value;
                 ApplyMaterialProperties();
             }
         }
 
         /// <summary>
-        /// Outline width in pixels: at 1080p by default, see <see cref="WidthMode"/>.
+        /// Outline width in pixels: at 1080p by default, see <see cref="WidthMode"/>. Negative
+        /// values become 0; NaN and infinity are ignored, with an error.
         /// </summary>
         public float Width
         {
             get => width;
             set
             {
+                if (!IsFinite(value, nameof(Width))) return;
                 width = Mathf.Max(0f, value);
                 ApplyMaterialProperties();
             }
@@ -145,13 +155,15 @@ namespace reromanlee.MeshOutline
         /// <summary>
         /// For <see cref="OutlineWidthMode.ScalesWithDistance"/>: the distance, in meters, at which
         /// the outline is <see cref="Width"/> pixels thick (at 1080p with a 60° field of view).
+        /// At least 0.01; NaN and infinity are ignored, with an error.
         /// </summary>
         public float ReferenceDistance
         {
             get => referenceDistance;
             set
             {
-                referenceDistance = Mathf.Max(0.01f, value);
+                if (!IsFinite(value, nameof(ReferenceDistance))) return;
+                referenceDistance = Mathf.Max(MinReferenceDistance, value);
                 ApplyMaterialProperties();
             }
         }
@@ -220,9 +232,18 @@ namespace reromanlee.MeshOutline
             if (renderer == null) throw new ArgumentNullException(nameof(renderer));
             if (excludedRenderers.Contains(renderer) == excluded) return;
             if (excluded) excludedRenderers.Add(renderer);
-            else excludedRenderers.RemoveAll(r => r == renderer);
+            else
+            {
+                for (int i = excludedRenderers.Count - 1; i >= 0; i--)
+                {
+                    if (excludedRenderers[i] == renderer) excludedRenderers.RemoveAt(i);
+                }
+            }
             Refresh();
         }
+
+        /// <summary>Whether a renderer was excluded with <see cref="SetExcluded"/> or in the inspector.</summary>
+        public bool IsExcluded(Renderer renderer) => renderer != null && excludedRenderers.Contains(renderer);
 
         /// <summary>
         /// Re-gathers the outlined renderers after the hierarchy changed at runtime (meshes added,
@@ -240,14 +261,13 @@ namespace reromanlee.MeshOutline
 
         private void Awake()
         {
-            if (!live.Contains(this)) live.Add(this);
-            RemoveLegacyObject();
+            Register();
             Build();
         }
 
         private void OnEnable()
         {
-            if (!live.Contains(this)) live.Add(this);
+            Register();
             // Awake doesn't run again after a domain reload, which tears everything down.
             if (!built) Build();
             stencilRef = StencilAllocator.Acquire(this);
@@ -269,10 +289,19 @@ namespace reromanlee.MeshOutline
 
         private void OnDestroy()
         {
+#if UNITY_EDITOR
             live.Remove(this);
+#endif
             OutlineTracking.Remove(this);
             StencilAllocator.Release(stencilRef, this);
             TearDown(immediate: !Application.isPlaying);
+        }
+
+        private void Register()
+        {
+#if UNITY_EDITOR
+            if (!live.Contains(this)) live.Add(this);
+#endif
         }
 
         private void UpdateTracking()
@@ -287,6 +316,9 @@ namespace reromanlee.MeshOutline
             DestroyInheritedParts();
             RebuildMaterials();
             SyncParts();
+            // Awake also runs for a disabled component, and then no OnEnable follows to hide the
+            // new parts.
+            SyncState();
         }
 
         /// <summary>
@@ -309,6 +341,7 @@ namespace reromanlee.MeshOutline
         {
             DestroyMaterial(ref maskMaterial, immediate: !Application.isPlaying);
             DestroyMaterial(ref fillMaterial, immediate: !Application.isPlaying);
+            OutlineShaders.CheckCustomFill(customFillMaterial, this);
             maskMaterial = CreateMaterial(OutlineShaders.Mask, null, "Outline Mask", OutlineShaders.MaskQueue);
             fillMaterial = CreateMaterial(OutlineShaders.Fill, customFillMaterial, "Outline Fill", OutlineShaders.FillQueue);
             materialsBuiltFrom = customFillMaterial;
@@ -378,16 +411,16 @@ namespace reromanlee.MeshOutline
             bool missingBakes = false;
             foreach (Renderer source in candidateBuffer)
             {
-                Mesh sourceMesh = GetSourceMesh(source);
-                Mesh baked = FindBakedMesh(source, sourceMesh);
                 OutlinePart part = FindPart(source);
+                Mesh baked = FindBakedMesh(source, part, out Mesh sourceMesh);
 
                 bool upToDate = part != null && part.SourceMesh == sourceMesh && part.Mesh != null &&
                                 (baked != null ? part.Mesh == baked : RuntimeBakeCache.Owns(part.Mesh));
-                if (!upToDate)
+                if (upToDate) part.SyncSkinning();
+                else
                 {
                     Mesh mesh = baked;
-                    if (mesh == null && Application.isPlaying) mesh = RuntimeBakeCache.Acquire(sourceMesh, this);
+                    if (mesh == null && Application.isPlaying) mesh = RuntimeBakeCache.Acquire(source, sourceMesh, this);
                     if (mesh == null)
                     {
                         missingBakes = true;
@@ -439,37 +472,79 @@ namespace reromanlee.MeshOutline
                 return;
             }
 
-            DetachFromLodGroups();
+            // The groups parts belong in, plus the ones they joined before and may have to leave.
+            lodGroupBuffer.Clear();
+            foreach (LODGroup group in lodGroups)
+            {
+                if (group != null && !lodGroupBuffer.Contains(group)) lodGroupBuffer.Add(group);
+            }
             foreach (OutlinePart part in parts)
             {
                 if (part.Renderer == null || FindLodLevel(part.Source, out LODGroup group) < 0) continue;
-                LOD[] lods = group.GetLODs();
-                for (int level = 0; level < lods.Length; level++)
-                {
-                    Renderer[] renderers = lods[level].renderers;
-                    if (Array.IndexOf(renderers, part.Source) < 0) continue;
-                    Array.Resize(ref renderers, renderers.Length + 1);
-                    renderers[renderers.Length - 1] = part.Renderer;
-                    lods[level].renderers = renderers;
-                }
-                group.SetLODs(lods);
-                if (!lodGroups.Contains(group)) lodGroups.Add(group);
+                if (!lodGroupBuffer.Contains(group)) lodGroupBuffer.Add(group);
             }
+
+            lodGroups.Clear();
+            foreach (LODGroup group in lodGroupBuffer)
+            {
+                if (SyncLodGroup(group, attach: true)) lodGroups.Add(group);
+            }
+            lodGroupBuffer.Clear();
         }
 
         private void DetachFromLodGroups()
         {
             foreach (LODGroup group in lodGroups)
             {
-                if (group == null) continue;
-                LOD[] lods = group.GetLODs();
-                for (int level = 0; level < lods.Length; level++)
-                {
-                    lods[level].renderers = Array.FindAll(lods[level].renderers, r => r != null && !IsOwnPart(r));
-                }
-                group.SetLODs(lods);
+                if (group != null) SyncLodGroup(group, attach: false);
             }
             lodGroups.Clear();
+        }
+
+        /// <summary>
+        /// Puts each part in exactly the levels that list its source (or, to detach, in none) with
+        /// one <c>SetLODs</c> call, skipped when the group already matches. Returns whether any
+        /// part is in the group.
+        /// </summary>
+        private bool SyncLodGroup(LODGroup group, bool attach)
+        {
+            LOD[] lods = group.GetLODs();
+            bool changed = false;
+            bool joined = false;
+            for (int level = 0; level < lods.Length; level++)
+            {
+                Renderer[] current = lods[level].renderers;
+                lodRendererBuffer.Clear();
+                foreach (Renderer renderer in current)
+                {
+                    if (renderer != null && !IsOwnPart(renderer)) lodRendererBuffer.Add(renderer);
+                }
+                if (attach)
+                {
+                    foreach (OutlinePart part in parts)
+                    {
+                        if (part.Renderer == null || Array.IndexOf(current, part.Source) < 0) continue;
+                        lodRendererBuffer.Add(part.Renderer);
+                        joined = true;
+                    }
+                }
+                if (SameRenderers(current, lodRendererBuffer)) continue;
+                lods[level].renderers = lodRendererBuffer.ToArray();
+                changed = true;
+            }
+            if (changed) group.SetLODs(lods);
+            lodRendererBuffer.Clear();
+            return joined;
+        }
+
+        private static bool SameRenderers(Renderer[] current, List<Renderer> next)
+        {
+            if (current.Length != next.Count) return false;
+            for (int i = 0; i < current.Length; i++)
+            {
+                if (!ReferenceEquals(current[i], next[i])) return false;
+            }
+            return true;
         }
 
         private bool IsOwnPart(Renderer renderer) =>
@@ -491,12 +566,22 @@ namespace reromanlee.MeshOutline
             return -1;
         }
 
-        private Mesh FindBakedMesh(Renderer source, Mesh sourceMesh)
+        /// <summary>
+        /// The baked outline mesh for a source renderer, and the source mesh it stands for. A
+        /// static-batched renderer reports its batch's combined mesh instead of its own, so it's
+        /// matched by renderer alone and keeps the mesh it was baked or built from.
+        /// </summary>
+        private Mesh FindBakedMesh(Renderer source, OutlinePart part, out Mesh sourceMesh)
         {
+            sourceMesh = GetSourceMesh(source);
+            bool staticBatched = source.isPartOfStaticBatch;
             foreach (BakedPart baked in bakedParts)
             {
-                if (baked.renderer == source && baked.sourceMesh == sourceMesh && baked.mesh != null) return baked.mesh;
+                if (baked.renderer != source || baked.mesh == null) continue;
+                if (staticBatched && baked.sourceMesh != null) sourceMesh = baked.sourceMesh;
+                if (baked.sourceMesh == sourceMesh) return baked.mesh;
             }
+            if (staticBatched && part != null && part.SourceMesh != null) sourceMesh = part.SourceMesh;
             return null;
         }
 
@@ -549,24 +634,6 @@ namespace reromanlee.MeshOutline
             material = null;
         }
 
-        private void RemoveLegacyObject()
-        {
-            if (legacyGeneratedObject == null) return;
-            GameObject legacy = legacyGeneratedObject;
-            legacyGeneratedObject = null;
-#if UNITY_EDITOR
-            if (!Application.isPlaying)
-            {
-                // Objects that come from a prefab can't be deleted from an instance of it.
-                if (PrefabUtility.IsPartOfPrefabInstance(legacy)) legacy.SetActive(false);
-                else DestroyImmediate(legacy);
-                EditorUtility.SetDirty(this);
-                return;
-            }
-#endif
-            Destroy(legacy);
-        }
-
         /// <summary>
         /// The renderers this outline covers: its own and, with <see cref="IncludeChildren"/>, its
         /// children's, minus renderers that belong to a nested outline.
@@ -601,14 +668,31 @@ namespace reromanlee.MeshOutline
             return null;
         }
 
+        private bool IsFinite(float value, string property)
+        {
+            if (!float.IsNaN(value) && !float.IsInfinity(value)) return true;
+            Debug.LogError($"[MeshOutline] {property} of '{name}' must be a finite number, not {value}; the value was ignored.", this);
+            return false;
+        }
+
+        private bool IsFinite(Color value, string property)
+        {
+            if (IsFinite(value)) return true;
+            Debug.LogError($"[MeshOutline] {property} of '{name}' must have finite components, not {value}; the value was ignored.", this);
+            return false;
+        }
+
+        // float.IsFinite is missing from the .NET Framework API compatibility level.
+        private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+        private static bool IsFinite(Color value) => IsFinite(value.r) && IsFinite(value.g) && IsFinite(value.b) && IsFinite(value.a);
+
         // Internal accessors for the editor and tests.
-        internal static IReadOnlyList<ObjectOutline> Live => live;
         internal IReadOnlyList<BakedPart> BakedParts => bakedParts;
         internal IReadOnlyList<OutlinePart> BuiltParts => parts;
         internal Material MaskMaterial => maskMaterial;
         internal Material FillMaterial => fillMaterial;
         internal int StencilRef => stencilRef;
-        internal bool IsExcluded(Renderer renderer) => excludedRenderers.Contains(renderer);
 
         internal void SetBakedParts(List<BakedPart> value)
         {
@@ -617,6 +701,8 @@ namespace reromanlee.MeshOutline
         }
 
 #if UNITY_EDITOR
+        internal static IReadOnlyList<ObjectOutline> Live => live;
+
         [InitializeOnLoadMethod]
         private static void TearDownBeforeDomainReload()
         {
@@ -633,8 +719,10 @@ namespace reromanlee.MeshOutline
 
         private void OnValidate()
         {
-            width = Mathf.Max(0f, width);
-            referenceDistance = Mathf.Max(0.01f, referenceDistance);
+            // Hand-edited or merged YAML can hold anything: never pass NaN or infinity to the shader.
+            width = IsFinite(width) ? Mathf.Max(0f, width) : DefaultWidth;
+            referenceDistance = IsFinite(referenceDistance) ? Mathf.Max(MinReferenceDistance, referenceDistance) : DefaultReferenceDistance;
+            if (!IsFinite(color)) color = Color.white;
             ApplyMaterialProperties();
             UpdateTracking();
             // Not awake yet, or a prefab asset.
