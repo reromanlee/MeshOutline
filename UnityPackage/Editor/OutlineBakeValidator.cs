@@ -71,6 +71,47 @@ namespace reromanlee.MeshOutline.Editor
             outline != null && PrefabUtility.IsPartOfPrefabAsset(outline) && !PrefabUtility.IsPartOfImmutablePrefab(outline);
 
         /// <summary>
+        /// Bakes the outlines on every prefab asset under <paramref name="folders"/> and saves the
+        /// prefabs that changed. Returns how many prefabs were saved.
+        /// </summary>
+        internal static int BakePrefabs(string[] folders)
+        {
+            string[] guids = AssetDatabase.FindAssets("t:Prefab", folders);
+            int saved = 0;
+            try
+            {
+                for (int i = 0; i < guids.Length; i++)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                    if (EditorUtility.DisplayCancelableProgressBar("Mesh Outline", $"Baking outlines: {path}", (float)i / guids.Length)) break;
+                    var root = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                    if (root == null) continue;
+
+                    bool changed = false;
+                    foreach (ObjectOutline outline in root.GetComponentsInChildren<ObjectOutline>(true))
+                    {
+                        try
+                        {
+                            changed |= Validate(outline, force: false);
+                        }
+                        catch (Exception exception)
+                        {
+                            Debug.LogException(exception, outline);
+                        }
+                    }
+                    if (!changed) continue;
+                    PrefabUtility.SavePrefabAsset(root);
+                    saved++;
+                }
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+            return saved;
+        }
+
+        /// <summary>
         /// For builds: gives every part without an up-to-date bake one, reusing a valid cache entry
         /// or else baking into the scene being built, and never writes an asset. Describes each
         /// part it baked in <paramref name="baked"/>.
