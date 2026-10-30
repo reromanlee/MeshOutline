@@ -51,6 +51,11 @@ namespace reromanlee.MeshOutline.Tests
             CollectionAssert.AreEquivalent(new[] { lod1, PartOf(outline, lod1).Renderer }, group.GetLODs()[1].renderers);
             Assert.IsTrue(PartOf(outline, lod1).Renderer.enabled, "at runtime the LODGroup decides visibility");
 
+            outline.Refresh();
+            outline.Refresh();
+            CollectionAssert.AreEquivalent(new[] { lod0, PartOf(outline, lod0).Renderer }, group.GetLODs()[0].renderers,
+                "refreshing never adds a part twice");
+
             Object.Destroy(outline);
             yield return null;
             CollectionAssert.AreEqual(new[] { lod0 }, group.GetLODs()[0].renderers);

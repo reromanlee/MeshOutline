@@ -1,6 +1,8 @@
+using System.Collections;
 using System.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace reromanlee.MeshOutline.Tests
 {
@@ -70,6 +72,37 @@ namespace reromanlee.MeshOutline.Tests
             Assert.AreEqual(40f, skinned.GetBlendShapeWeight(0), "no per-frame work unless tracking is on");
             outline.Refresh();
             Assert.AreEqual(75f, skinned.GetBlendShapeWeight(0));
+        }
+
+        [UnityTest]
+        public IEnumerator SwappingTheMeshOrSkeleton_RebindsThePartOnRefresh()
+        {
+            yield return StartFresh();
+            yield return new EnterPlayMode();
+
+            // Runtime meshes are readable, so these outlines bake on the spot.
+            SkinnedMeshRenderer source = CreateSkinnedStrip("Limb");
+            var outline = source.gameObject.AddComponent<ObjectOutline>();
+            var part = (SkinnedMeshRenderer)outline.BuiltParts.Single().Renderer;
+
+            // New equipment: another mesh, skinned to another skeleton.
+            SkinnedMeshRenderer equipment = CreateSkinnedStrip("Equipment");
+            source.sharedMesh = equipment.sharedMesh;
+            source.bones = equipment.bones;
+            source.rootBone = equipment.rootBone;
+            outline.Refresh();
+            Assert.AreSame(equipment.sharedMesh, outline.BuiltParts.Single().SourceMesh);
+            CollectionAssert.AreEqual(equipment.bones, part.bones);
+            Assert.AreSame(equipment.rootBone, part.rootBone);
+
+            // The same mesh re-bound to yet another skeleton.
+            SkinnedMeshRenderer other = CreateSkinnedStrip("Other");
+            source.bones = other.bones;
+            source.rootBone = other.rootBone;
+            outline.Refresh();
+            CollectionAssert.AreEqual(other.bones, part.bones);
+            Assert.AreSame(other.rootBone, part.rootBone);
+            yield return new ExitPlayMode();
         }
 
         [Test]
