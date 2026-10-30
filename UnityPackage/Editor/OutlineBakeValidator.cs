@@ -70,6 +70,36 @@ namespace reromanlee.MeshOutline.Editor
         internal static bool IsEditablePrefabAsset(ObjectOutline outline) =>
             outline != null && PrefabUtility.IsPartOfPrefabAsset(outline) && !PrefabUtility.IsPartOfImmutablePrefab(outline);
 
+        /// <summary>
+        /// For builds: gives every part without an up-to-date bake one, reusing a valid cache entry
+        /// or else baking into the scene being built, and never writes an asset. Describes each
+        /// part it baked in <paramref name="baked"/>.
+        /// </summary>
+        internal static void BakeMissingForBuild(ObjectOutline outline, List<string> baked)
+        {
+            outline.GatherCandidates(candidates, includeExcluded: true);
+            IReadOnlyList<BakedPart> current = outline.BakedParts;
+            List<BakedPart> next = null;
+            foreach (Renderer renderer in candidates)
+            {
+                // Static batching has already swapped its mesh: there's nothing left to bake from.
+                if (renderer.isPartOfStaticBatch) continue;
+                Mesh sourceMesh = ObjectOutline.GetSourceMesh(renderer);
+                if (IsUpToDate(Find(current, renderer), sourceMesh)) continue;
+
+                Mesh cached = OutlineBakeCache.TryGetKey(sourceMesh, out string key) ? OutlineBakeCache.FindUpToDate(sourceMesh, key) : null;
+                BakedPart part = cached != null
+                    ? new BakedPart { renderer = renderer, sourceMesh = sourceMesh, mesh = cached }
+                    : BakeIntoScene(renderer, sourceMesh);
+
+                if (next == null) next = new List<BakedPart>(current);
+                next.RemoveAll(p => p.renderer == renderer);
+                next.Add(part);
+                baked.Add($"{PathOf(renderer.transform)} (mesh '{sourceMesh.name}')");
+            }
+            if (next != null) outline.SetBakedParts(next);
+        }
+
         /// <summary>One broken mesh must not stop the rest of the batch from baking.</summary>
         private static void TryValidate(ObjectOutline outline, bool force)
         {
@@ -135,17 +165,33 @@ namespace reromanlee.MeshOutline.Editor
 
             // The source mesh isn't an asset (procedural, ProBuilder...): store the bake in the
             // scene. A fingerprint catches the source being edited in place.
-            string hash = OutlineMeshBaker.Fingerprint(sourceMesh).ToString();
-            if (!force && existing.mesh != null && existing.sourceMesh == sourceMesh && existing.sourceHash == hash &&
-                !EditorUtility.IsPersistent(existing.mesh))
-            {
-                return existing;
-            }
+            if (!force && IsUpToDate(existing, sourceMesh) && !EditorUtility.IsPersistent(existing.mesh)) return existing;
+            BakedPart part = BakeIntoScene(renderer, sourceMesh);
+            DestroyIfUnused(existing.mesh, outline);
+            return part;
+        }
 
+        private static BakedPart BakeIntoScene(Renderer renderer, Mesh sourceMesh)
+        {
             var mesh = new Mesh { name = sourceMesh.name + " (Outline)" };
             OutlineMeshBaker.Bake(sourceMesh, mesh);
-            DestroyIfUnused(existing.mesh, outline);
-            return new BakedPart { renderer = renderer, sourceMesh = sourceMesh, mesh = mesh, sourceHash = hash };
+            return new BakedPart
+            {
+                renderer = renderer,
+                sourceMesh = sourceMesh,
+                mesh = mesh,
+                sourceHash = OutlineMeshBaker.Fingerprint(sourceMesh).ToString()
+            };
+        }
+
+        /// <summary>
+        /// Whether a part's bake matches its source. Cached bakes are kept fresh on import;
+        /// scene-stored ones carry a fingerprint of the source they were baked from.
+        /// </summary>
+        private static bool IsUpToDate(BakedPart part, Mesh sourceMesh)
+        {
+            if (part.mesh == null || part.sourceMesh != sourceMesh) return false;
+            return EditorUtility.IsPersistent(part.mesh) || part.sourceHash == OutlineMeshBaker.Fingerprint(sourceMesh).ToString();
         }
 
         private static bool ShouldValidate(ObjectOutline outline)
@@ -171,6 +217,13 @@ namespace reromanlee.MeshOutline.Editor
         private static bool Same(BakedPart a, BakedPart b) =>
             a.renderer == b.renderer && a.sourceMesh == b.sourceMesh && a.mesh == b.mesh &&
             (a.sourceHash ?? string.Empty) == (b.sourceHash ?? string.Empty);
+
+        private static string PathOf(Transform transform)
+        {
+            string path = transform.name;
+            for (Transform parent = transform.parent; parent != null; parent = parent.parent) path = parent.name + "/" + path;
+            return path;
+        }
 
         /// <summary>Destroys a replaced scene-stored bake unless another outline still uses it.</summary>
         private static void DestroyIfUnused(Mesh mesh, ObjectOutline owner)

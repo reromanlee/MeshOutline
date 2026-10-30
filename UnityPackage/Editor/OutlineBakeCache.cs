@@ -92,6 +92,22 @@ namespace reromanlee.MeshOutline.Editor
             return baked;
         }
 
+        /// <summary>
+        /// The cached outline mesh for a source mesh asset if it exists and is up to date. Never
+        /// bakes or writes anything, so it's safe during a build.
+        /// </summary>
+        internal static Mesh FindUpToDate(Mesh source, string key)
+        {
+            if (verified.TryGetValue(key, out Mesh known) && known != null) return known;
+            string path = FindPath(key);
+            Mesh baked = path != null ? AssetDatabase.LoadAssetAtPath<Mesh>(path) : null;
+            if (baked == null) return null;
+            EntryInfo info = ReadInfo(path);
+            if (info.version != OutlineMeshBaker.FormatVersion || info.fingerprint != OutlineMeshBaker.Fingerprint(source).ToString()) return null;
+            verified[key] = baked;
+            return baked;
+        }
+
         private static Mesh Create(Mesh source, string key, string fingerprint)
         {
             string folder = Folder;
