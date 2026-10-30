@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using UnityEngine;
@@ -50,6 +51,7 @@ namespace reromanlee.MeshOutline
 
         private static void CopyBlendShapes(Mesh source, Mesh target)
         {
+            if (source.blendShapeCount == 0) return;
             int vertexCount = source.vertexCount;
             var positions = new Vector3[vertexCount];
             var normals = new Vector3[vertexCount];
@@ -97,6 +99,7 @@ namespace reromanlee.MeshOutline
             hash.Append(source.GetAllBoneWeights().ToArray());
 
             hash.Append(source.blendShapeCount);
+            if (source.blendShapeCount == 0) return hash;
             var deltas = new Vector3[source.vertexCount];
             var unusedNormals = new Vector3[source.vertexCount];
             var unusedTangents = new Vector3[source.vertexCount];
@@ -115,7 +118,14 @@ namespace reromanlee.MeshOutline
 
         private static List<int> GetMergedTriangles(Mesh source)
         {
-            var merged = new List<int>();
+            long capacity = 0;
+            for (int submesh = 0; submesh < source.subMeshCount; submesh++)
+            {
+                MeshTopology topology = source.GetTopology(submesh);
+                if (topology == MeshTopology.Triangles) capacity += source.GetIndexCount(submesh);
+                else if (topology == MeshTopology.Quads) capacity += source.GetIndexCount(submesh) / 4 * 6;
+            }
+            var merged = new List<int>((int)Math.Min(capacity, int.MaxValue));
             var indices = new List<int>();
             for (int submesh = 0; submesh < source.subMeshCount; submesh++)
             {
