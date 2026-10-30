@@ -35,6 +35,13 @@ namespace reromanlee.MeshOutline.Editor
             public static readonly GUIContent Advanced = new GUIContent("Advanced");
             public static readonly GUIContent LodHidden = new GUIContent("baked · LOD 1+",
                 "Outlined at runtime, whenever its LOD level is showing. Edit mode only outlines LOD0.");
+            public static readonly GUIContent Excluded = new GUIContent("excluded");
+            public static readonly GUIContent Baking = new GUIContent("baking...", "Baked on the next editor update.");
+            public static readonly GUIContent BakedInScene = new GUIContent("baked (scene)",
+                "Its mesh isn't an asset (e.g. ProBuilder), so the outline mesh is stored in the scene; it's rebaked when the mesh changes.");
+            public static readonly GUIContent Baked = new GUIContent("baked",
+                "Uses the shared outline mesh cache (Project Settings > Mesh Outline).");
+            public static readonly GUIContent PingRenderer = new GUIContent(string.Empty, "Click to highlight the renderer.");
 
             public static readonly GUIStyle Status = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
             public static readonly GUIStyle Dimmed = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
@@ -146,7 +153,8 @@ namespace reromanlee.MeshOutline.Editor
                         PrefabUtility.RecordPrefabInstancePropertyModifications(outline);
                     }
 
-                    if (GUILayout.Button(new GUIContent(renderer.name, "Click to highlight the renderer."), EditorStyles.label, GUILayout.MinWidth(40f)))
+                    Styles.PingRenderer.text = renderer.name;
+                    if (GUILayout.Button(Styles.PingRenderer, EditorStyles.label, GUILayout.MinWidth(40f)))
                     {
                         EditorGUIUtility.PingObject(renderer);
                     }
@@ -162,20 +170,21 @@ namespace reromanlee.MeshOutline.Editor
             PartStatus status = GetStatus(outline, renderer);
             if (status == PartStatus.Baked || status == PartStatus.BakedInScene)
             {
-                OutlinePart part = outline.BuiltParts.FirstOrDefault(p => p.Source == renderer);
-                if (part != null && part.HiddenByLod) return Styles.LodHidden;
+                foreach (OutlinePart part in outline.BuiltParts)
+                {
+                    if (part.Source == renderer && part.HiddenByLod) return Styles.LodHidden;
+                }
             }
             switch (status)
             {
                 case PartStatus.Excluded:
-                    return new GUIContent("excluded");
+                    return Styles.Excluded;
                 case PartStatus.Baking:
-                    return new GUIContent("baking...", "Baked on the next editor update.");
+                    return Styles.Baking;
                 case PartStatus.BakedInScene:
-                    return new GUIContent("baked (scene)",
-                        "Its mesh isn't an asset (e.g. ProBuilder), so the outline mesh is stored in the scene; it's rebaked when the mesh changes.");
+                    return Styles.BakedInScene;
                 default:
-                    return new GUIContent("baked", "Uses the shared outline mesh cache (Project Settings > Mesh Outline).");
+                    return Styles.Baked;
             }
         }
 
